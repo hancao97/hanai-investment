@@ -1,0 +1,15 @@
+{
+  "name": "hanai-investment-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hanai Investment - 本地优先 A 股价值研究与多角色投资委员会桌面客户端",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=8"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @hanai/app dev",
+    "build": "pnpm --filter @hanai/app build",
+    "typecheck": "pnpm --filter @hanai/app typecheck"
+  }
+}

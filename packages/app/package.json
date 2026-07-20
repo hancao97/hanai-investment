@@ -1,0 +1,32 @@
+{
+  "name": "@hanai/app",
+  "version": "0.1.0",
+  "description": "Hanai Investment - 本地优先 A 股价值研究与多角色投资委员会桌面客户端",
+  "main": "./out/main/index.mjs",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "@vueuse/core": "^13.0.0",
+    "echarts": "^5.6.0",
+    "markdown-it": "^14.3.0",
+    "pinia": "^3.0.0",
+    "pinyin-pro": "^3.26.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "electron": "^43.1.1",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^7.0.0",
+    "vue-tsc": "^3.0.0"
+  }
+}
