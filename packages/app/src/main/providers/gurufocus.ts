@@ -5,7 +5,7 @@ import { VALUATION_CACHE_DIR } from '../paths'
 import type { ValuationSummary, ProviderMeta } from '../../shared/types'
 
 const PROVIDER_ID = 'gurufocus-cn-prototype'
-const SOURCE_NAME = '价值大师网（个人研究原型接口，未获再分发授权）'
+const SOURCE_NAME = '价值大师网（个人研究接口，未获再分发授权）'
 const BASE = 'https://www.gurufocus.cn'
 const HEADERS = {
   Referer: 'https://www.gurufocus.cn/',

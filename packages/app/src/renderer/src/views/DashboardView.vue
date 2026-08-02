@@ -15,6 +15,9 @@ const drill = ref<{ code: string; name: string; stocks: StockQuote[]; meta: Prov
 const rankKind = ref<'gainers' | 'losers' | 'amount' | 'turnover'>('gainers')
 const ranks = ref<RankEntry[]>([])
 const loading = ref(true)
+const refreshing = ref(false)
+const sectorLoading = ref(false)
+const rankLoading = ref(false)
 const errorMsg = ref('')
 const lastUpdated = ref<string | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -30,7 +33,9 @@ const statusLabel = computed(() => {
   return map[overview.value?.marketStatus ?? 'unknown']
 })
 
-async function refresh(): Promise<void> {
+async function refresh(showFeedback = false): Promise<void> {
+  if (refreshing.value) return
+  if (showFeedback) refreshing.value = true
   errorMsg.value = ''
   try {
     const [ov, sec, rk] = await Promise.all([
@@ -50,19 +55,38 @@ async function refresh(): Promise<void> {
     errorMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
+    refreshing.value = false
   }
 }
 
 async function switchSectorType(t: 'industry' | 'concept'): Promise<void> {
+  if (sectorLoading.value || t === sectorType.value) return
+  errorMsg.value = ''
   sectorType.value = t
   drill.value = null
-  sectors.value = await window.hanai.market.sectors(t)
+  sectorLoading.value = true
+  try {
+    sectors.value = await window.hanai.market.sectors(t)
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    sectorLoading.value = false
+  }
 }
 
 async function switchRank(k: typeof rankKind.value): Promise<void> {
+  if (rankLoading.value || k === rankKind.value) return
+  errorMsg.value = ''
   rankKind.value = k
-  const r = await window.hanai.market.ranks(k)
-  ranks.value = r.entries
+  rankLoading.value = true
+  try {
+    const r = await window.hanai.market.ranks(k)
+    ranks.value = r.entries
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    rankLoading.value = false
+  }
 }
 
 onMounted(() => {
@@ -86,6 +110,17 @@ function heatColor(pct: number | null): string {
   return `rgb(${Math.round(42 - k * 14)}, ${Math.round(58 + k * 100)}, ${Math.round(58 + k * 42)})`
 }
 
+function escapeHtml(value: string): string {
+  const chars: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }
+  return value.replace(/[&<>"']/g, (char) => chars[char])
+}
+
 const treemapOption = computed<EChartsCoreOption | null>(() => {
   if (!sectors.value) return null
   const valid = sectors.value.sectors
@@ -97,6 +132,7 @@ const treemapOption = computed<EChartsCoreOption | null>(() => {
   const MIN_SHARE = 0.004
   const majors = valid.filter((s, i) => i < MAX_TILES && (s.amount as number) / totalAmount >= MIN_SHARE)
   const minors = valid.slice(majors.length)
+  const majorAmount = majors.reduce((sum, s) => sum + (s.amount as number), 0)
   const data: Record<string, unknown>[] = majors.map((s) => ({
     name: s.name,
     value: s.amount as number,
@@ -115,29 +151,29 @@ const treemapOption = computed<EChartsCoreOption | null>(() => {
     }
   }))
   if (minors.length) {
-    const minorAmount = minors.reduce((sum, s) => sum + (s.amount as number), 0)
-    const weightedPct =
-      minorAmount > 0
-        ? minors.reduce((sum, s) => sum + (s.changePct ?? 0) * (s.amount as number), 0) / minorAmount
-        : null
+    // 「其他」只用于容纳长尾信息，不参与成交额比例布局；固定占树图面积的 3.5%。
+    // 数据保持降序且关闭 ECharts 自动排序后，最后一个节点会稳定落在右下角。
+    const OTHER_TILE_SHARE = 0.035
+    const otherLayoutValue = majorAmount > 0 ? (majorAmount * OTHER_TILE_SHARE) / (1 - OTHER_TILE_SHARE) : 1
     const upN = minors.filter((s) => (s.changePct ?? 0) > 0).length
+    const downN = minors.filter((s) => (s.changePct ?? 0) < 0).length
+    const minorSectors = [...minors]
+      .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0))
+      .map((s) => ({ code: s.code, name: s.name, amount: s.amount, changePct: s.changePct }))
     data.push({
       name: `其他 ${minors.length} 个板块`,
-      value: minorAmount,
-      changePct: weightedPct,
+      value: otherLayoutValue,
+      changePct: null,
       upCount: upN,
-      downCount: minors.length - upN,
+      downCount: downN,
       leaderName: null,
       leaderChangePct: null,
       sectorCode: null,
       isOthers: true,
-      minorNames: minors.slice(0, 12).map((s) => s.name),
+      minorSectors,
       itemStyle: { color: '#262b36' },
       label: {
-        formatter: (p: { data: { changePct: number | null } }): string => {
-          const pct = p.data.changePct
-          return `其他 ${minors.length} 个\n${pct == null ? '—' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%'}`
-        }
+        formatter: (): string => `其他 ${minors.length} 个`
       }
     })
   }
@@ -146,6 +182,34 @@ const treemapOption = computed<EChartsCoreOption | null>(() => {
       backgroundColor: '#161b26',
       borderColor: 'rgba(255,255,255,0.14)',
       textStyle: { color: '#e8eaf0', fontSize: 12 },
+      renderMode: 'html',
+      enterable: true,
+      confine: true,
+      hideDelay: 500,
+      transitionDuration: 0,
+      position: (
+        point: [number, number],
+        params: unknown,
+        _el: unknown,
+        _rect: { x: number; y: number; width: number; height: number } | null,
+        size: { contentSize: [number, number]; viewSize: [number, number] }
+      ): [number, number] => {
+        const item = params as { data?: { isOthers?: boolean } }
+        const [contentWidth, contentHeight] = size.contentSize
+        const [viewWidth, viewHeight] = size.viewSize
+        if (item.data?.isOthers) {
+          // 文字与色块背景属于不同图形元素，不能使用它们各自的边界定位。
+          // 统一钉在图表右下区域，并向右覆盖「其他」色块，保证鼠标可以连续移入。
+          const rightOverlap = Math.min(96, viewWidth * 0.1)
+          const left = Math.max(8, viewWidth - contentWidth - rightOverlap)
+          const top = Math.max(8, viewHeight - contentHeight - 8)
+          return [left, top]
+        }
+        const gap = 12
+        const left = point[0] + gap + contentWidth <= viewWidth ? point[0] + gap : point[0] - contentWidth - gap
+        const top = point[1] + gap + contentHeight <= viewHeight ? point[1] + gap : point[1] - contentHeight - gap
+        return [Math.max(0, left), Math.max(0, top)]
+      },
       formatter: (p: {
         name: string
         value: number
@@ -156,22 +220,22 @@ const treemapOption = computed<EChartsCoreOption | null>(() => {
           leaderName: string | null
           leaderChangePct: number | null
           isOthers?: boolean
-          minorNames?: string[]
+          minorSectors?: { code: string; name: string; amount: number | null; changePct: number | null }[]
         }
       }): string => {
         const d = p.data
         const pct = d.changePct
         const pctStr = pct == null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
         if (d.isOthers) {
-          return [
-            `<b>${p.name}</b>&nbsp;&nbsp;<span style="color:${pct != null && pct > 0 ? '#f04a55' : '#2fac74'}">${pctStr}（成交额加权）</span>`,
-            `合计成交额 ${fmtAmount(p.value)}`,
-            `上涨 ${d.upCount ?? '—'} 个 / 下跌 ${d.downCount ?? '—'} 个板块`,
-            d.minorNames?.length ? `含 ${d.minorNames.join('、')} 等` : '',
-            `<span style="color:#5c6474">成交额占比过小的板块合并展示</span>`
-          ]
-            .filter(Boolean)
-            .join('<br/>')
+          const rows = (d.minorSectors ?? [])
+            .map((sector, index) => {
+              const sectorPct = sector.changePct
+              const sectorPctStr = sectorPct == null ? '—' : `${sectorPct > 0 ? '+' : ''}${sectorPct.toFixed(2)}%`
+              const pctClass = sectorPct == null || sectorPct === 0 ? 'is-flat' : sectorPct > 0 ? 'is-up' : 'is-down'
+              return `<button type="button" class="other-tooltip-row" data-sector-code="${escapeHtml(sector.code)}" data-sector-name="${escapeHtml(sector.name)}"><span class="other-tooltip-rank">${index + 1}</span><span class="other-tooltip-name">${escapeHtml(sector.name)}</span><span class="other-tooltip-amount">${fmtAmount(sector.amount)}</span><span class="other-tooltip-pct ${pctClass}">${sectorPctStr}</span></button>`
+            })
+            .join('')
+          return `<div class="other-tooltip"><div class="other-tooltip-head"><b>${escapeHtml(p.name)}</b><span>按成交额排序</span></div><div class="other-tooltip-summary">上涨 ${d.upCount ?? '—'} 个 · 下跌 ${d.downCount ?? '—'} 个</div><div class="other-tooltip-columns"><span>#</span><span>板块</span><span>成交额</span><span>涨跌幅</span></div><div class="other-tooltip-list">${rows}</div><div class="other-tooltip-hint">点击板块下钻成分股</div></div>`
         }
         return [
           `<b>${p.name}</b>&nbsp;&nbsp;<span style="color:${pct != null && pct > 0 ? '#f04a55' : '#2fac74'}">${pctStr}</span>`,
@@ -191,6 +255,7 @@ const treemapOption = computed<EChartsCoreOption | null>(() => {
         type: 'treemap',
         roam: false,
         nodeClick: false,
+        sort: false,
         breadcrumb: { show: false },
         width: '100%',
         height: '100%',
@@ -234,6 +299,20 @@ const breadthTotal = computed(() => {
   if (!b || b.up == null || b.down == null || b.flat == null) return 0
   return b.up + b.down + b.flat
 })
+
+// 东方财富的上涨/下跌家数包含涨停/跌停；拆成互斥的五段，避免可视化重复计数。
+const breadthSegments = computed(() => {
+  const b = overview.value?.breadth
+  const limitUp = Math.max(0, b?.limitUp ?? 0)
+  const limitDown = Math.max(0, b?.limitDown ?? 0)
+  return {
+    limitUp,
+    up: Math.max(0, (b?.up ?? 0) - limitUp),
+    flat: Math.max(0, b?.flat ?? 0),
+    down: Math.max(0, (b?.down ?? 0) - limitDown),
+    limitDown
+  }
+})
 </script>
 
 <template>
@@ -242,7 +321,16 @@ const breadthTotal = computed(() => {
       <h1>今日市场</h1>
       <span class="tag" :class="{ gold: overview?.marketStatus === 'trading' }">{{ statusLabel }}</span>
       <span class="sub">数据来源 东方财富 · 近实时快照 · 更新于 {{ fmtTime(lastUpdated) }}</span>
-      <button class="btn small ghost" style="margin-left: auto" @click="refresh">刷新</button>
+      <button
+        class="btn small ghost"
+        :class="{ loading: refreshing }"
+        style="margin-left: auto"
+        :disabled="refreshing"
+        @click="refresh(true)"
+      >
+        <span v-if="refreshing" class="loading-spinner" />
+        {{ refreshing ? '刷新中' : '刷新' }}
+      </button>
     </div>
 
     <div v-if="errorMsg" class="card" style="border-color: rgba(240,74,85,0.4); margin-bottom: 14px">
@@ -276,30 +364,51 @@ const breadthTotal = computed(() => {
     <!-- 市场宽度 -->
     <div class="card breadth-card">
       <div class="card-title">
-        市场宽度
+        <span class="breadth-title">
+          市场宽度
+          <span class="breadth-scope">东方财富口径 · 沪深北非 ST</span>
+        </span>
         <span v-if="overview" class="meta-line">两市成交 {{ fmtAmount(overview.breadth.totalAmount) }}</span>
       </div>
       <template v-if="overview && breadthTotal > 0">
         <div class="breadth-bar">
           <div
+            v-if="breadthSegments.limitUp > 0"
+            class="seg seg-limit-up"
+            :style="{ width: (breadthSegments.limitUp / breadthTotal) * 100 + '%' }"
+            :title="`涨停 ${breadthSegments.limitUp}`"
+          />
+          <div
+            v-if="breadthSegments.up > 0"
             class="seg seg-up"
-            :style="{ width: ((overview.breadth.up ?? 0) / breadthTotal) * 100 + '%' }"
+            :style="{ width: (breadthSegments.up / breadthTotal) * 100 + '%' }"
+            :title="`上涨 ${breadthSegments.up}`"
           />
           <div
+            v-if="breadthSegments.flat > 0"
             class="seg seg-flat"
-            :style="{ width: ((overview.breadth.flat ?? 0) / breadthTotal) * 100 + '%' }"
+            :style="{ width: (breadthSegments.flat / breadthTotal) * 100 + '%' }"
+            :title="`平盘 ${breadthSegments.flat}`"
           />
           <div
+            v-if="breadthSegments.down > 0"
             class="seg seg-down"
-            :style="{ width: ((overview.breadth.down ?? 0) / breadthTotal) * 100 + '%' }"
+            :style="{ width: (breadthSegments.down / breadthTotal) * 100 + '%' }"
+            :title="`下跌 ${breadthSegments.down}`"
+          />
+          <div
+            v-if="breadthSegments.limitDown > 0"
+            class="seg seg-limit-down"
+            :style="{ width: (breadthSegments.limitDown / breadthTotal) * 100 + '%' }"
+            :title="`跌停 ${breadthSegments.limitDown}`"
           />
         </div>
         <div class="breadth-stats">
-          <span class="up">上涨 <b class="num">{{ overview.breadth.up }}</b></span>
-          <span class="up">涨停 <b class="num">{{ overview.breadth.limitUp ?? '—' }}</b></span>
-          <span class="flat">平盘 <b class="num">{{ overview.breadth.flat }}</b></span>
-          <span class="down">跌停 <b class="num">{{ overview.breadth.limitDown ?? '—' }}</b></span>
-          <span class="down">下跌 <b class="num">{{ overview.breadth.down }}</b></span>
+          <span class="limit-up">涨停 <b class="num">{{ breadthSegments.limitUp }}</b></span>
+          <span class="up">上涨 <b class="num">{{ breadthSegments.up }}</b></span>
+          <span class="flat">平盘 <b class="num">{{ breadthSegments.flat }}</b></span>
+          <span class="down">下跌 <b class="num">{{ breadthSegments.down }}</b></span>
+          <span class="limit-down">跌停 <b class="num">{{ breadthSegments.limitDown }}</b></span>
         </div>
       </template>
       <div v-else-if="!loading" class="empty">暂无涨跌分布数据</div>
@@ -318,16 +427,26 @@ const breadthTotal = computed(() => {
             <template v-if="!drill">
               <button
                 class="btn small"
-                :class="{ primary: sectorType === 'industry' }"
+                :class="{
+                  primary: sectorType === 'industry',
+                  loading: sectorLoading && sectorType === 'industry'
+                }"
+                :disabled="sectorLoading"
                 @click="switchSectorType('industry')"
               >
+                <span v-if="sectorLoading && sectorType === 'industry'" class="loading-spinner" />
                 行业
               </button>
               <button
                 class="btn small"
-                :class="{ primary: sectorType === 'concept' }"
+                :class="{
+                  primary: sectorType === 'concept',
+                  loading: sectorLoading && sectorType === 'concept'
+                }"
+                :disabled="sectorLoading"
                 @click="switchSectorType('concept')"
               >
+                <span v-if="sectorLoading && sectorType === 'concept'" class="loading-spinner" />
                 概念
               </button>
             </template>
@@ -335,19 +454,22 @@ const breadthTotal = computed(() => {
           </span>
         </div>
 
-        <div v-if="!drill" class="treemap-body">
+        <div v-if="!drill" class="treemap-body" :class="{ 'panel-updating': sectorLoading }">
+          <div v-if="sectorLoading" class="panel-loading-indicator">
+            <span class="loading-spinner" />正在更新板块
+          </div>
           <EChart :option="treemapOption" @chart-click="onTreemapClick" />
           <div class="legend">
-            <span class="legend-label">跌</span>
+            <span class="legend-label">涨</span>
             <span
-              v-for="(c, i) in [-6, -3, -1, 0, 1, 3, 6]"
+              v-for="(c, i) in [6, 3, 1, 0, -1, -3, -6]"
               :key="i"
               class="legend-swatch"
               :style="{ background: heatColor(c) }"
               :title="c + '%'"
             />
-            <span class="legend-label">涨</span>
-            <span class="legend-note">面积 = 成交额</span>
+            <span class="legend-label">跌</span>
+            <span class="legend-note">面积 = 板块成交额（个股可重叠）· 其他固定</span>
           </div>
         </div>
 
@@ -389,14 +511,22 @@ const breadthTotal = computed(() => {
               v-for="t in rankTabs"
               :key="t.key"
               class="btn small"
-              :class="{ primary: rankKind === t.key }"
+              :class="{
+                primary: rankKind === t.key,
+                loading: rankLoading && rankKind === t.key
+              }"
+              :disabled="rankLoading"
               @click="switchRank(t.key)"
             >
+              <span v-if="rankLoading && rankKind === t.key" class="loading-spinner" />
               {{ t.label }}
             </button>
           </span>
         </div>
-        <div class="rank-body">
+        <div class="rank-body" :class="{ 'panel-updating': rankLoading }">
+          <div v-if="rankLoading" class="panel-loading-indicator">
+            <span class="loading-spinner" />正在更新榜单
+          </div>
           <table class="data">
             <thead>
               <tr>
@@ -434,6 +564,154 @@ const breadthTotal = computed(() => {
 </template>
 
 <style scoped>
+.loading-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+}
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.btn.loading:disabled {
+  cursor: default;
+  opacity: 0.82;
+}
+.panel-updating {
+  pointer-events: none;
+}
+.panel-updating > :not(.panel-loading-indicator) {
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+.panel-loading-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: rgba(11, 14, 20, 0.88);
+  color: var(--text-secondary);
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+}
+:deep(.other-tooltip) {
+  width: 390px;
+}
+:deep(.other-tooltip-head) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+:deep(.other-tooltip-head b) {
+  font-size: 13px;
+}
+:deep(.other-tooltip-head span),
+:deep(.other-tooltip-summary),
+:deep(.other-tooltip-hint) {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+:deep(.other-tooltip-summary) {
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+:deep(.other-tooltip-columns) {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) 82px 62px;
+  gap: 7px;
+  padding: 5px 8px 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+:deep(.other-tooltip-columns span:nth-child(1)),
+:deep(.other-tooltip-columns span:nth-child(3)),
+:deep(.other-tooltip-columns span:nth-child(4)) {
+  text-align: right;
+}
+:deep(.other-tooltip-list) {
+  max-height: 238px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 3px -5px 0;
+  padding: 0 3px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+:deep(.other-tooltip-list::-webkit-scrollbar) {
+  width: 6px;
+}
+:deep(.other-tooltip-list::-webkit-scrollbar-thumb) {
+  border-radius: 99px;
+  background: var(--border-strong);
+}
+:deep(.other-tooltip-row) {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) 82px 62px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 5px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+:deep(.other-tooltip-row:hover) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+:deep(.other-tooltip-rank) {
+  color: var(--text-muted);
+  font-family: var(--font-num);
+  font-size: 10px;
+  text-align: right;
+}
+:deep(.other-tooltip-name) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.other-tooltip-pct) {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+:deep(.other-tooltip-amount) {
+  color: var(--text-secondary);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+:deep(.other-tooltip-pct.is-up) {
+  color: var(--up);
+}
+:deep(.other-tooltip-pct.is-down) {
+  color: var(--down);
+}
+:deep(.other-tooltip-pct.is-flat) {
+  color: var(--flat);
+}
+:deep(.other-tooltip-hint) {
+  padding-top: 6px;
+  text-align: right;
+}
 .index-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -483,6 +761,17 @@ const breadthTotal = computed(() => {
 .breadth-card {
   margin-bottom: 14px;
 }
+.breadth-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.breadth-scope {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
 .breadth-bar {
   display: flex;
   height: 14px;
@@ -494,14 +783,20 @@ const breadthTotal = computed(() => {
 .seg {
   transition: width 0.25s ease;
 }
+.seg-limit-up {
+  background: linear-gradient(90deg, #9f303c, #bd3b48);
+}
 .seg-up {
-  background: linear-gradient(90deg, #d8434e, #f04a55);
+  background: linear-gradient(90deg, #d34450, #e6525d);
 }
 .seg-flat {
   background: #3a4150;
 }
 .seg-down {
-  background: linear-gradient(90deg, #2fac74, #27946a);
+  background: linear-gradient(90deg, #299666, #2fac74);
+}
+.seg-limit-down {
+  background: linear-gradient(90deg, #237a59, #298f66);
 }
 .breadth-stats {
   display: flex;
@@ -511,6 +806,12 @@ const breadthTotal = computed(() => {
 .breadth-stats b {
   font-size: 13.5px;
   margin-left: 3px;
+}
+.breadth-stats .limit-up {
+  color: #cf5964;
+}
+.breadth-stats .limit-down {
+  color: #329d73;
 }
 
 .main-grid {
@@ -525,6 +826,7 @@ const breadthTotal = computed(() => {
   flex-direction: column;
 }
 .treemap-body {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -568,6 +870,7 @@ const breadthTotal = computed(() => {
   flex-direction: column;
 }
 .rank-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;

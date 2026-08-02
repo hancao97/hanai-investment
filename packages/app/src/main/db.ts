@@ -42,44 +42,21 @@ function migrate(d: DatabaseSync): void {
       PRIMARY KEY (group_id, sec_id)
     );
 
-    CREATE TABLE IF NOT EXISTS conversations (
+    CREATE TABLE IF NOT EXISTS judgements (
       id TEXT PRIMARY KEY,
-      persona_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      sec_id TEXT,
-      evidence_id TEXT,
-      codex_thread_id TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id);
-
-    CREATE TABLE IF NOT EXISTS analysis_runs (
-      analysis_hash TEXT PRIMARY KEY,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_judgements_updated ON judgements(updated_at);
 
-    CREATE TABLE IF NOT EXISTS evidence_snapshots (
-      id TEXT PRIMARY KEY,
-      sec_id TEXT NOT NULL,
-      hash TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
+    DROP TABLE IF EXISTS messages;
+    DROP TABLE IF EXISTS conversations;
+    DROP TABLE IF EXISTS evidence_snapshots;
+    DROP TABLE IF EXISTS analysis_runs;
   `)
   addColumnIfMissing(d, 'watch_items', 'added_at', 'TEXT')
   addColumnIfMissing(d, 'watch_items', 'base_price', 'REAL')
-  addColumnIfMissing(d, 'messages', 'activity', 'TEXT')
+  addColumnIfMissing(d, 'watch_groups', 'is_default', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 function addColumnIfMissing(d: DatabaseSync, table: string, column: string, type: string): void {

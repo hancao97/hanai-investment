@@ -2,6 +2,7 @@
 import { ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import type { SearchResult } from '@shared/types'
+import WatchGroupDialog from './WatchGroupDialog.vue'
 import { fmtNum, fmtPct, pctClass } from '../utils/format'
 
 const props = defineProps<{ open: boolean }>()
@@ -12,6 +13,8 @@ const query = ref('')
 const results = ref<SearchResult[]>([])
 const activeIdx = ref(0)
 const inputEl = ref<HTMLInputElement | null>(null)
+const watchTarget = ref<SearchResult | null>(null)
+const watchDialogOpen = ref(false)
 let seq = 0
 
 watch(
@@ -49,6 +52,16 @@ function pick(r: SearchResult): void {
   void router.push(`/stock/${r.secId}`)
 }
 
+function openWatchDialog(result: SearchResult): void {
+  watchTarget.value = result
+  watchDialogOpen.value = true
+}
+
+function afterWatchAdded(): void {
+  watchDialogOpen.value = false
+  close()
+}
+
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') close()
   else if (e.key === 'ArrowDown') {
@@ -75,7 +88,7 @@ function onKeydown(e: KeyboardEvent): void {
           spellcheck="false"
         />
         <div v-if="results.length" class="results">
-          <button
+          <div
             v-for="(r, i) in results"
             :key="r.secId"
             class="result"
@@ -88,13 +101,22 @@ function onKeydown(e: KeyboardEvent): void {
             <span class="tag">{{ r.exchange }}</span>
             <span class="r-price num">{{ fmtNum(r.price) }}</span>
             <span class="r-pct num" :class="pctClass(r.changePct)">{{ fmtPct(r.changePct) }}</span>
-          </button>
+            <button class="watch-add" @click.stop="openWatchDialog(r)">＋ 加入自选</button>
+          </div>
         </div>
         <div v-else-if="query.trim()" class="empty">未找到匹配的证券（本地主数据）</div>
         <div v-else class="hint">支持：600519 · 贵州茅台 · guizhoumaotai · gzmt</div>
       </div>
     </div>
   </Teleport>
+  <WatchGroupDialog
+    v-if="watchTarget"
+    v-model:open="watchDialogOpen"
+    :sec-id="watchTarget.secId"
+    :stock-name="watchTarget.name"
+    mode="add"
+    @changed="afterWatchAdded"
+  />
 </template>
 
 <style scoped>
@@ -109,7 +131,7 @@ function onKeydown(e: KeyboardEvent): void {
   padding-top: 14vh;
 }
 .panel {
-  width: 560px;
+  width: 700px;
   max-height: 60vh;
   background: #12161f;
   border: 1px solid var(--border-strong);
@@ -140,7 +162,7 @@ function onKeydown(e: KeyboardEvent): void {
   width: 100%;
   padding: 9px 12px;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-s);
   color: var(--text-primary);
   font-size: 13px;
@@ -149,6 +171,9 @@ function onKeydown(e: KeyboardEvent): void {
 }
 .result.active {
   background: var(--bg-active);
+}
+.result:hover {
+  border-color: var(--border-subtle);
 }
 .r-code {
   color: var(--text-secondary);
@@ -165,6 +190,26 @@ function onKeydown(e: KeyboardEvent): void {
 .r-pct {
   width: 72px;
   text-align: right;
+}
+.watch-add {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border: 1px solid rgba(224, 179, 76, .32);
+  border-radius: var(--radius-s);
+  background: rgba(224, 179, 76, .08);
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.watch-add:hover {
+  border-color: rgba(224, 179, 76, .55);
+  background: rgba(224, 179, 76, .14);
+}
+@media (max-width: 760px) {
+  .panel { width: calc(100vw - 32px); }
+  .r-price,
+  .r-pct { display: none; }
 }
 .hint,
 .empty {

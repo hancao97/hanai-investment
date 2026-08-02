@@ -14,13 +14,12 @@ import {
 import { getValuation } from './providers/gurufocus'
 import { searchWithQuotes, syncMasterIfNeeded, masterCount, masterUpdatedAt, getMaster } from './master'
 import * as watchlist from './watchlist'
-import { listPersonas, setPersonaEnabled } from './personas'
+import { listPersonas } from './personas'
 import { codex } from './codex'
-import * as chat from './chat'
-import * as committee from './committee'
-import { createEvidenceSnapshot } from './evidence'
+import * as judgements from './judgements'
+import { kvSet } from './db'
 import { DATA_ROOT, WORKDIR, MARKET_CACHE_DIR, VALUATION_CACHE_DIR, LOGS_DIR } from './paths'
-import type { AppHealth, ApprovalRequest } from '../shared/types'
+import type { AppHealth } from '../shared/types'
 
 let marketOk = true
 let marketLastSuccess: string | null = null
@@ -40,28 +39,6 @@ function dirSize(dir: string): number {
     }
   }
   return total
-}
-
-// 审批：转发给渲染进程并等待用户决定
-const pendingApprovals = new Map<number, (d: 'accept' | 'decline') => void>()
-
-export function setupApprovalBridge(win: () => BrowserWindow | null): void {
-  codex.setApprovalResolver(async (req: ApprovalRequest) => {
-    const w = win()
-    if (!w) return 'decline'
-    w.webContents.send('hanai:stream', { type: 'approval-request', request: req })
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pendingApprovals.delete(req.requestId)
-        resolve('decline')
-      }, 5 * 60 * 1000)
-      pendingApprovals.set(req.requestId, (d) => {
-        clearTimeout(timer)
-        pendingApprovals.delete(req.requestId)
-        resolve(d)
-      })
-    })
-  })
 }
 
 export function registerIpc(): void {
@@ -115,49 +92,30 @@ export function registerIpc(): void {
   ipcMain.handle('watch:removeGroup', (_e, id: string) => watchlist.removeGroup(id))
   ipcMain.handle('watch:add', (_e, groupId: string, secId: string) => watchlist.addItem(groupId, secId))
   ipcMain.handle('watch:remove', (_e, groupId: string, secId: string) => watchlist.removeItem(groupId, secId))
+  ipcMain.handle('watch:move', (_e, fromGroupId: string, toGroupId: string, secId: string) =>
+    watchlist.moveItem(fromGroupId, toGroupId, secId)
+  )
   ipcMain.handle('watch:isWatched', (_e, secId: string) => watchlist.isWatched(secId))
 
   // ---------- 角色 ----------
   ipcMain.handle('persona:list', () => listPersonas())
-  ipcMain.handle('persona:setEnabled', (_e, id: string, enabled: boolean) => setPersonaEnabled(id, enabled))
 
   // ---------- Codex ----------
   ipcMain.handle('codex:state', () => codex.getState())
   ipcMain.handle('codex:restart', () => codex.restart())
-  ipcMain.handle('codex:setModel', (_e, model: string | null) => codex.setModel(model))
-  ipcMain.handle('codex:approve', (_e, requestId: number, decision: 'accept' | 'decline') => {
-    pendingApprovals.get(requestId)?.(decision)
+  ipcMain.handle('codex:setModel', (_e, model: string | null) => {
+    codex.setModel(model)
+    kvSet('codex.selectedModel', model ?? '')
   })
-
-  // ---------- 单聊 ----------
-  ipcMain.handle('chat:list', (_e, personaId?: string) => chat.listConversations(personaId))
-  ipcMain.handle('chat:get', (_e, id: string) => chat.getConversation(id))
-  ipcMain.handle('chat:create', (_e, personaId: string, secId?: string | null) =>
-    chat.createConversation(personaId, secId)
+  // ---------- 大师研判 ----------
+  ipcMain.handle('judgement:list', () => judgements.listJudgements())
+  ipcMain.handle('judgement:get', (_e, id: string) => judgements.getJudgement(id))
+  ipcMain.handle('judgement:create', (_e, params: { secId: string; personaId: string }) =>
+    judgements.createJudgement(params)
   )
-  ipcMain.handle('chat:send', (_e, id: string, text: string) => chat.sendMessage(id, text))
-  ipcMain.handle('chat:stop', (_e, id: string) => chat.stopMessage(id))
-  ipcMain.handle('chat:rename', (_e, id: string, title: string) => chat.renameConversation(id, title))
-  ipcMain.handle('chat:delete', (_e, id: string) => chat.deleteConversation(id))
-
-  // ---------- 投资委员会 ----------
-  ipcMain.handle('committee:list', () => committee.listRuns())
-  ipcMain.handle('committee:get', (_e, hash: string) => committee.getRun(hash))
-  ipcMain.handle(
-    'committee:create',
-    (_e, params: { secId: string; moderatorPersonaId: string; participantPersonaIds: string[]; topic: string | null }) =>
-      committee.createAnalysis(params)
-  )
-  ipcMain.handle('committee:start', (_e, hash: string) => {
-    void committee.startAnalysis(hash)
-  })
-  ipcMain.handle('committee:stop', (_e, hash: string) => committee.stopAnalysis(hash))
-  ipcMain.handle('committee:artifacts', (_e, hash: string) => committee.getArtifacts(hash))
-  ipcMain.handle('committee:activity', (_e, hash: string) => committee.getActivity(hash))
-  ipcMain.handle('committee:delete', (_e, hash: string) => committee.deleteRun(hash))
-
-  // ---------- 证据 ----------
-  ipcMain.handle('evidence:create', (_e, secId: string) => createEvidenceSnapshot(secId))
+  ipcMain.handle('judgement:start', (_e, id: string) => judgements.startJudgement(id))
+  ipcMain.handle('judgement:activity', (_e, id: string) => judgements.getJudgementActivity(id))
+  ipcMain.handle('judgement:report', (_e, id: string) => judgements.getJudgementReport(id))
 
   // ---------- 应用与诊断 ----------
   ipcMain.handle('app:health', (): AppHealth => {
@@ -200,7 +158,7 @@ export function registerIpc(): void {
         buttons: ['取消', '清理'],
         defaultId: 0,
         message: `确认清理${kind === 'market' ? '行情' : '估值'}缓存？`,
-        detail: `将删除 ${dir} 下的缓存文件。自选、角色与聊天记录不受影响。`
+        detail: `将删除 ${dir} 下的缓存文件。自选、专家与研判归档不受影响。`
       })
       if (response !== 1) return false
     }

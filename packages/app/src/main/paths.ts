@@ -9,7 +9,7 @@ export const VALUATION_CACHE_DIR = join(CACHE_DIR, 'valuation')
 export const PERSONAS_DIR = join(DATA_ROOT, 'personas')
 export const RUNTIME_DIR = join(DATA_ROOT, 'runtime')
 export const WORKDIR = join(RUNTIME_DIR, 'workdir')
-export const SESSIONS_DIR = join(WORKDIR, 'sessions')
+export const JUDGEMENTS_DIR = join(WORKDIR, 'judgements')
 export const STATE_DIR = join(RUNTIME_DIR, 'state')
 export const EXPORTS_DIR = join(DATA_ROOT, 'exports')
 export const LOGS_DIR = join(DATA_ROOT, 'logs')
@@ -24,7 +24,7 @@ export function ensureDataDirs(): void {
     PERSONAS_DIR,
     RUNTIME_DIR,
     WORKDIR,
-    SESSIONS_DIR,
+    JUDGEMENTS_DIR,
     STATE_DIR,
     EXPORTS_DIR,
     LOGS_DIR

@@ -24,6 +24,12 @@ function push2Host(): string {
   return hostSeq === 0 ? 'push2.eastmoney.com' : `${hostSeq}.push2.eastmoney.com`
 }
 
+let hisHostSeq = 0
+function push2HisHost(): string {
+  hisHostSeq = (hisHostSeq + 1) % 20
+  return hisHostSeq === 0 ? 'push2his.eastmoney.com' : `${hisHostSeq}.push2his.eastmoney.com`
+}
+
 // ---------- 全局限速与分集群降级 ----------
 const MIN_INTERVAL_MS = 120 // 全局请求最小间隔
 const REALTIME_FAIL_THRESHOLD = 4 // 实时集群连续失败阈值
@@ -115,9 +121,13 @@ async function emGet<T>(
   breakerCheck()
   const qs = new URLSearchParams(params).toString()
   // 实时集群偶发限流；push2delay 为官方延迟集群，作为兜底保证可用性
-  const realtimeHost = opts.his ? 'push2his.eastmoney.com' : push2Host()
+  const realtimeHost = opts.his ? push2HisHost() : push2Host()
   const hosts: { host: string; realtime: boolean }[] = []
-  if (realtimeAvailable()) hosts.push({ host: realtimeHost, realtime: true })
+  if (realtimeAvailable()) {
+    hosts.push({ host: realtimeHost, realtime: true })
+    // 历史集群没有可用的 delay 备源；首节点失败后再换一个节点重试。
+    if (opts.his) hosts.push({ host: push2HisHost(), realtime: true })
+  }
   hosts.push({ host: 'push2delay.eastmoney.com', realtime: false })
 
   for (const { host, realtime } of hosts) {
@@ -450,7 +460,7 @@ async function getMetricsRaw(secId: string): Promise<(StockGetRaw & { __secId: s
     fltt: '2',
     invt: '2',
     fields:
-      'f43,f44,f45,f46,f47,f48,f50,f55,f57,f58,f60,f84,f85,f92,f105,f116,f117,f127,f162,f163,f164,f167,f168,f169,f170,f173,f183,f184,f185,f186,f187,f188,f189'
+      'f43,f44,f45,f46,f47,f48,f50,f55,f57,f58,f60,f71,f84,f85,f92,f105,f116,f117,f126,f127,f137,f162,f163,f164,f165,f167,f168,f169,f170,f171,f173,f183,f184,f185,f186,f187,f188,f189'
   })
   if (!data || data.f57 == null) return null
   return { ...data, __secId: secId }
@@ -500,13 +510,20 @@ export async function getStockMetrics(secId: string): Promise<StockMetrics | nul
     prevClose: num(d.f60),
     volume: num(d.f47),
     amount: num(d.f48),
+    averagePrice: num(d.f71),
+    amplitude: num(d.f171),
+    mainNetInflow: num(d.f137),
     turnoverRate: num(d.f168),
     volumeRatio: num(d.f50),
     marketCap: num(d.f116),
     floatCap: num(d.f117),
-    // f162=PE(动) f163=PE(TTM) f164=PE(静)
-    peTtm: num(d.f163),
-    peStatic: num(d.f164),
+    totalShares: num(d.f84),
+    floatShares: num(d.f85),
+    // 东方财富盘口字段：f162=PE(动)、f163=PE(静)、f164=PE(TTM)
+    peDynamic: num(d.f162),
+    peTtm: num(d.f164),
+    peStatic: num(d.f163),
+    psTtm: num(d.f165),
     pb: num(d.f167),
     roe: num(d.f173),
     totalRevenue: num(d.f183),
@@ -516,7 +533,7 @@ export async function getStockMetrics(secId: string): Promise<StockMetrics | nul
     grossMargin: num(d.f186),
     netMargin: num(d.f187),
     debtRatio: num(d.f188),
-    dividendYield: null,
+    dividendYield: num(d.f126),
     eps: num(d.f55),
     bvps: num(d.f92),
     listingDate,

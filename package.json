@@ -2,7 +2,7 @@
   "name": "hanai-investment-monorepo",
   "version": "0.1.0",
   "private": true,
-  "description": "Hanai Investment - 本地优先 A 股价值研究与多角色投资委员会桌面客户端",
+  "description": "Hanai Investment - 本地优先 A 股行情、估值与单专家投资研判桌面客户端",
   "engines": {
     "node": ">=22",
     "pnpm": ">=8"

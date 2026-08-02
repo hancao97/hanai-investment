@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import type { WatchGroup, StockQuote, SearchResult } from '@shared/types'
+import WatchGroupDialog from '../components/WatchGroupDialog.vue'
+import WatchGroupManager from '../components/WatchGroupManager.vue'
 import { fmtNum, fmtPct, fmtAmount, pctClass, fmtTime } from '../utils/format'
 
 const router = useRouter()
@@ -11,13 +13,18 @@ const activeGroupId = ref<string>('')
 const quotes = ref<Map<string, StockQuote>>(new Map())
 const lastUpdated = ref<string | null>(null)
 const staleWarn = ref(false)
-const sortKey = ref<'changePct' | 'amount' | 'marketCap' | 'pe' | null>(null)
+const sortKey = ref<'addedAt' | 'changePct' | 'amount' | 'marketCap' | 'pe'>('addedAt')
 const sortDesc = ref(true)
 let timer: ReturnType<typeof setInterval> | null = null
 
 // 组内添加搜索
 const addQuery = ref('')
 const addResults = ref<SearchResult[]>([])
+const addTarget = ref<SearchResult | null>(null)
+const addDialogOpen = ref(false)
+const moveTarget = ref<{ secId: string; name: string } | null>(null)
+const moveDialogOpen = ref(false)
+const managerOpen = ref(false)
 let addSeq = 0
 
 const activeGroup = computed(() => groups.value.find((g) => g.id === activeGroupId.value) ?? null)
@@ -45,9 +52,15 @@ const rows = computed<WatchRow[]>(() => {
     .map((id) => withMeta(id, quotes.value.get(id)!))
   const missing = g.secIds.filter((id) => !quotes.value.has(id)).map((id) => withMeta(id, null))
   const base: WatchRow[] = [...list, ...missing]
-  if (!sortKey.value) return base
   const k = sortKey.value
   return [...base].sort((a, b) => {
+    if (k === 'addedAt') {
+      if (!a.addedAt && !b.addedAt) return g.secIds.indexOf(b.secId) - g.secIds.indexOf(a.secId)
+      if (!a.addedAt) return 1
+      if (!b.addedAt) return -1
+      const result = a.addedAt.localeCompare(b.addedAt)
+      return sortDesc.value ? -result : result
+    }
     const av = 'placeholder' in a ? null : (a as StockQuote & WatchRow)[k]
     const bv = 'placeholder' in b ? null : (b as StockQuote & WatchRow)[k]
     if (av == null && bv == null) return 0
@@ -62,11 +75,11 @@ function fmtAddedDate(iso: string | null): string {
   return iso.slice(0, 10)
 }
 
-function toggleSort(k: 'changePct' | 'amount' | 'marketCap' | 'pe'): void {
+function toggleSort(k: 'addedAt' | 'changePct' | 'amount' | 'marketCap' | 'pe'): void {
   if (sortKey.value === k) {
     if (sortDesc.value) sortDesc.value = false
     else {
-      sortKey.value = null
+      sortKey.value = 'addedAt'
       sortDesc.value = true
     }
   } else {
@@ -77,7 +90,9 @@ function toggleSort(k: 'changePct' | 'amount' | 'marketCap' | 'pe'): void {
 
 async function loadGroups(): Promise<void> {
   groups.value = await window.hanai.watch.groups()
-  if (!activeGroupId.value && groups.value.length) activeGroupId.value = groups.value[0].id
+  if (!groups.value.some((group) => group.id === activeGroupId.value)) {
+    activeGroupId.value = groups.value.find((group) => group.isDefault)?.id ?? groups.value[0]?.id ?? ''
+  }
 }
 
 async function refreshQuotes(): Promise<void> {
@@ -110,11 +125,27 @@ async function onAddSearch(): Promise<void> {
   if (mySeq === addSeq) addResults.value = r.slice(0, 8)
 }
 
-async function addStock(secId: string): Promise<void> {
-  if (!activeGroupId.value) return
-  await window.hanai.watch.add(activeGroupId.value, secId)
+function openAddDialog(result: SearchResult): void {
+  addTarget.value = result
+  addDialogOpen.value = true
+}
+
+async function afterAddChanged(): Promise<void> {
   addQuery.value = ''
   addResults.value = []
+  await loadGroups()
+  await refreshQuotes()
+}
+
+function openMoveDialog(row: WatchRow): void {
+  moveTarget.value = {
+    secId: row.secId,
+    name: 'placeholder' in row ? row.secId : row.name
+  }
+  moveDialogOpen.value = true
+}
+
+async function afterMoveChanged(): Promise<void> {
   await loadGroups()
   await refreshQuotes()
 }
@@ -125,51 +156,11 @@ async function removeStock(secId: string): Promise<void> {
   await loadGroups()
 }
 
-// Electron 渲染进程不支持 window.prompt，使用内联输入框
-const addingGroup = ref(false)
-const newGroupName = ref('')
-const groupInputEl = ref<HTMLInputElement | null>(null)
-
-async function beginAddGroup(): Promise<void> {
-  addingGroup.value = true
-  newGroupName.value = ''
-  await nextTick()
-  groupInputEl.value?.focus()
-}
-
-async function confirmAddGroup(): Promise<void> {
-  // 回车确认后输入框卸载会再触发 blur，先复位状态防止重复提交
-  if (!addingGroup.value) return
-  const name = newGroupName.value.trim()
-  addingGroup.value = false
-  newGroupName.value = ''
-  if (!name) return
-  const g = await window.hanai.watch.addGroup(name)
-  await loadGroups()
-  activeGroupId.value = g.id
-  await refreshQuotes()
-}
-
-// Electron 渲染进程同样不支持 window.confirm，采用二次点击确认
-const confirmingRemove = ref(false)
-let confirmTimer: ReturnType<typeof setTimeout> | null = null
-
-async function removeGroup(): Promise<void> {
-  const g = activeGroup.value
-  if (!g) return
-  if (!confirmingRemove.value) {
-    confirmingRemove.value = true
-    if (confirmTimer) clearTimeout(confirmTimer)
-    confirmTimer = setTimeout(() => {
-      confirmingRemove.value = false
-    }, 3000)
-    return
+async function afterGroupsManaged(nextGroups: WatchGroup[]): Promise<void> {
+  groups.value = nextGroups
+  if (!groups.value.some((group) => group.id === activeGroupId.value)) {
+    activeGroupId.value = groups.value.find((group) => group.isDefault)?.id ?? groups.value[0]?.id ?? ''
   }
-  confirmingRemove.value = false
-  if (confirmTimer) clearTimeout(confirmTimer)
-  await window.hanai.watch.removeGroup(g.id)
-  activeGroupId.value = ''
-  await loadGroups()
   await refreshQuotes()
 }
 
@@ -208,27 +199,10 @@ onBeforeUnmount(() => {
           @click="switchGroup(g.id)"
         >
           {{ g.name }}
+          <span v-if="g.isDefault" class="default-mark" title="默认分组不可删除">默认</span>
           <span class="count num">{{ g.secIds.length }}</span>
         </button>
-        <input
-          v-if="addingGroup"
-          ref="groupInputEl"
-          v-model="newGroupName"
-          class="field group-input"
-          placeholder="分组名称，回车确认"
-          @keydown.enter="confirmAddGroup"
-          @keydown.esc="addingGroup = false"
-          @blur="confirmAddGroup"
-        />
-        <button v-else class="btn small ghost" @click="beginAddGroup">＋ 分组</button>
-        <button
-          v-if="groups.length > 1"
-          class="btn small ghost"
-          :style="confirmingRemove ? 'color: var(--down)' : ''"
-          @click="removeGroup"
-        >
-          {{ confirmingRemove ? '确认删除？' : '删除分组' }}
-        </button>
+        <button class="btn small ghost" @click="managerOpen = true">管理分组</button>
       </div>
       <div class="add-box">
         <input
@@ -238,11 +212,11 @@ onBeforeUnmount(() => {
           @input="onAddSearch"
         />
         <div v-if="addResults.length" class="add-results card">
-          <button v-for="r in addResults" :key="r.secId" class="add-item" @click="addStock(r.secId)">
+          <button v-for="r in addResults" :key="r.secId" class="add-item" @click="openAddDialog(r)">
             <span class="num" style="color: var(--text-muted)">{{ r.code }}</span>
             <b>{{ r.name }}</b>
             <span class="tag">{{ r.exchange }}</span>
-            <span style="margin-left: auto; color: var(--accent-strong)">添加</span>
+            <span class="add-action">＋ 加入自选</span>
           </button>
         </div>
       </div>
@@ -268,7 +242,9 @@ onBeforeUnmount(() => {
               PE(动) <span v-if="sortKey === 'pe'">{{ sortDesc ? '↓' : '↑' }}</span>
             </th>
             <th>PB</th>
-            <th>加入日期</th>
+            <th class="sortable" @click="toggleSort('addedAt')">
+              加入日期 <span v-if="sortKey === 'addedAt'">{{ sortDesc ? '↓' : '↑' }}</span>
+            </th>
             <th>加入以来</th>
             <th></th>
           </tr>
@@ -278,6 +254,7 @@ onBeforeUnmount(() => {
             <template v-if="'placeholder' in row">
               <td colspan="10" style="color: var(--text-muted)">{{ row.secId }} · 行情加载中或不可用</td>
               <td @click.stop>
+                <button v-if="groups.length > 1" class="btn small ghost" @click="openMoveDialog(row)">移动</button>
                 <button class="btn small ghost" @click="removeStock(row.secId)">移除</button>
               </td>
             </template>
@@ -293,11 +270,18 @@ onBeforeUnmount(() => {
               <td class="num">{{ fmtAmount(row.marketCap) }}</td>
               <td class="num">{{ row.pe == null || row.pe <= 0 ? '—' : row.pe.toFixed(1) }}</td>
               <td class="num">{{ row.pb == null || row.pb <= 0 ? '—' : row.pb.toFixed(2) }}</td>
-              <td class="num" style="color: var(--text-muted)">{{ fmtAddedDate(row.addedAt) }}</td>
+              <td
+                class="num"
+                style="color: var(--text-muted)"
+                :title="row.addedAt ? `加入时间：${new Date(row.addedAt).toLocaleString('zh-CN')}` : '旧版自选缺少历史时间'"
+              >
+                {{ fmtAddedDate(row.addedAt) }}
+              </td>
               <td class="num" :class="pctClass(row.sinceAddPct)" :title="row.sinceAddPct == null ? '加入时未记录基准价' : '相对加入时价格'">
                 {{ row.sinceAddPct == null ? '—' : fmtPct(row.sinceAddPct) }}
               </td>
               <td @click.stop>
+                <button v-if="groups.length > 1" class="btn small ghost" @click="openMoveDialog(row)">移动</button>
                 <button class="btn small ghost" @click="removeStock(row.secId)">移除</button>
               </td>
             </template>
@@ -309,6 +293,25 @@ onBeforeUnmount(() => {
         <div>使用上方搜索框或 ⌘K 全局搜索添加</div>
       </div>
     </div>
+
+    <WatchGroupDialog
+      v-if="addTarget"
+      v-model:open="addDialogOpen"
+      :sec-id="addTarget.secId"
+      :stock-name="addTarget.name"
+      mode="add"
+      @changed="afterAddChanged"
+    />
+    <WatchGroupDialog
+      v-if="moveTarget"
+      v-model:open="moveDialogOpen"
+      :sec-id="moveTarget.secId"
+      :stock-name="moveTarget.name"
+      :source-group-id="activeGroupId"
+      mode="move"
+      @changed="afterMoveChanged"
+    />
+    <WatchGroupManager v-model:open="managerOpen" @changed="afterGroupsManaged" />
   </div>
 </template>
 
@@ -330,10 +333,11 @@ onBeforeUnmount(() => {
   margin-left: 4px;
   font-size: 11px;
 }
-.group-input {
-  width: 160px;
-  height: 28px;
-  font-size: 12.5px;
+.default-mark {
+  margin-left: 5px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 500;
 }
 .add-box {
   position: relative;
@@ -369,6 +373,18 @@ onBeforeUnmount(() => {
 }
 .add-item:hover {
   background: var(--bg-hover);
+}
+.add-action {
+  margin-left: auto;
+  color: var(--accent-strong);
+  font-size: 11px;
+  white-space: nowrap;
+}
+td:last-child {
+  white-space: nowrap;
+}
+td:last-child .btn + .btn {
+  margin-left: 4px;
 }
 th.sortable {
   cursor: pointer;

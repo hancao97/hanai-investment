@@ -355,7 +355,6 @@ A-E 是候选模块，不是每次全部执行。使用最小充分研究：
 - 证据审计与批评：`references/research/04-external-views.md`
 - 48 条决策规则与日志模板：`references/research/05-decisions.md`
 - 时间线与方法演化：`references/research/06-timeline.md`
-- 原始 PDF：`references/sources/pdfs/`
 
 需要追溯具体课程原文、案例和页码时，读取对应研究文件，不凭摘要补写。
 

@@ -1,21 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
 const app = useAppStore()
 const router = useRouter()
 
-const railPersonas = computed(() => app.personas.filter((p) => p.enabled && !p.builtin))
-
-async function openChat(personaId: string): Promise<void> {
-  const list = await window.hanai.chat.list(personaId)
-  if (list.length) {
-    void router.push(`/chat/${list[0].id}`)
-  } else {
-    const conv = await window.hanai.chat.create(personaId)
-    void router.push(`/chat/${conv.id}`)
-  }
+function openJudgements(personaId: string): void {
+  void router.push({ path: '/judgements', query: { persona: personaId } })
 }
 </script>
 
@@ -23,17 +14,16 @@ async function openChat(personaId: string): Promise<void> {
   <aside class="rail">
     <div class="rail-title">大师</div>
     <button
-      v-for="p in railPersonas"
+      v-for="p in app.personas"
       :key="p.id"
       class="avatar-btn"
-      :title="`${p.name} · 点击开始对话`"
-      @click="openChat(p.id)"
+      :title="`${p.name} · 查看其研判归档`"
+      @click="openJudgements(p.id)"
     >
       <span class="avatar" :style="{ borderColor: p.color, color: p.color }">{{ p.shortName }}</span>
-      <span v-if="!p.verified" class="unverified" title="未验证角色">!</span>
     </button>
     <div class="rail-spacer" />
-    <button class="avatar-btn add" title="角色中心" @click="router.push('/personas')">
+    <button class="avatar-btn add" title="专家中心" @click="router.push('/personas')">
       <span class="avatar dashed">＋</span>
     </button>
   </aside>
@@ -86,21 +76,6 @@ async function openChat(personaId: string): Promise<void> {
 .avatar.dashed {
   border-style: dashed;
   font-weight: 400;
-}
-.unverified {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--warn);
-  color: #14110a;
-  font-size: 10px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .rail-spacer {
   flex: 1;

@@ -89,8 +89,10 @@ export interface KLineBar {
   close: number
   high: number
   low: number
+  /** 成交量，单位：手（1 手 = 100 股） */
   volume: number
-  amount: number
+  /** 成交额，单位：元；备源未提供时为 null */
+  amount: number | null
 }
 
 export interface StockMetrics {
@@ -106,12 +108,19 @@ export interface StockMetrics {
   prevClose: number | null
   volume: number | null
   amount: number | null
+  averagePrice: number | null
+  amplitude: number | null
+  mainNetInflow: number | null
   turnoverRate: number | null
   volumeRatio: number | null
   marketCap: number | null
   floatCap: number | null
+  totalShares: number | null
+  floatShares: number | null
+  peDynamic: number | null
   peTtm: number | null
   peStatic: number | null
+  psTtm: number | null
   pb: number | null
   roe: number | null
   totalRevenue: number | null
@@ -133,6 +142,7 @@ export interface TrendPoint {
   time: string
   price: number
   avgPrice: number | null
+  /** 当前分钟成交量，单位：手（1 手 = 100 股） */
   volume: number
 }
 
@@ -161,6 +171,7 @@ export interface WatchItem {
 export interface WatchGroup {
   id: string
   name: string
+  isDefault: boolean
   secIds: string[]
   items: WatchItem[]
 }
@@ -195,13 +206,9 @@ export interface Persona {
   avatar: string | null
   color: string
   skillPath: string
-  hasFidelity: boolean
-  verified: boolean
   roleTag: string | null // 角色类型标签：如「价值投资」「游资大佬」
-  enabled: boolean
   defaultPrompt: string | null
   tags: string[]
-  builtin: boolean
 }
 
 // ---------- Codex ----------
@@ -221,46 +228,7 @@ export interface CodexState {
   models: { id: string; displayName: string }[]
   selectedModel: string | null
   lastError: string | null
-}
-
-export interface ApprovalRequest {
-  requestId: number
-  threadId: string
-  kind: 'command' | 'file' | 'permission'
-  summary: string
-  detail: string
-}
-
-// ---------- 聊天 ----------
-export interface EvidenceSnapshot {
-  id: string
-  secId: string
-  code: string
-  name: string
-  createdAt: string
-  hash: string
-  facts: Record<string, unknown>
-}
-
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  status: 'pending' | 'streaming' | 'done' | 'interrupted' | 'error'
-  createdAt: string
-  activity?: AgentActivityItem[] // agent 分析过程（命令 / 推理 / 工具调用）
-}
-
-export interface Conversation {
-  id: string
-  personaId: string
-  title: string
-  secId: string | null
-  evidenceId: string | null
-  codexThreadId: string | null
-  messages: ChatMessage[]
-  createdAt: string
-  updatedAt: string
+  modelCatalogError: string | null
 }
 
 // ---------- Agent 实时活动 ----------
@@ -273,61 +241,39 @@ export interface AgentActivityItem {
   at: string
 }
 
-// ---------- 分析讨论（单角色与委员会共用同一流程） ----------
-export type AnalysisMode = 'solo' | 'committee'
+// ---------- 大师研判 ----------
+export type JudgementStatus = 'preparing' | 'running' | 'verifying' | 'completed' | 'failed'
 
-export type AnalysisStage =
-  | 'created'
-  | 'evidence_locked'
-  | 'round1_running'
-  | 'round1_locked'
-  | 'round2_running'
-  | 'round2_locked'
-  | 'moderating'
-  | 'completed'
-  | 'cancelled'
-  | 'failed'
-
-export interface AnalysisSeat {
-  seatId: string
-  seatRole: 'moderator' | 'participant'
-  personaId: string
-  personaName: string
-  directory: string
-  codexThreadId: string | null
-  turnStatus: Record<string, 'pending' | 'running' | 'completed' | 'failed'>
-}
-
-export interface AnalysisRun {
-  analysisHash: string
-  mode: AnalysisMode
+export interface JudgementRun {
+  id: string
   secId: string
   code: string
   stockName: string
-  topic: string | null
-  stage: AnalysisStage
+  personaId: string
+  personaName: string
+  status: JudgementStatus
   directory: string
-  evidenceHash: string | null
-  seats: AnalysisSeat[]
+  reportPath: string
+  skillPath: string
+  codexThreadId: string | null
+  model: string | null
   createdAt: string
   updatedAt: string
+  completedAt: string | null
   error: string | null
 }
 
-export interface AnalysisArtifact {
-  seatId: string
-  personaName: string
-  type: 'turn01' | 'turn02' | 'final'
-  path: string
+export interface JudgementReport {
   content: string
   sha256: string
+  size: number
 }
 
-export interface AnalysisActivityEntry {
-  seatId: string
-  round: string
+export interface JudgementActivityEntry {
   item: AgentActivityItem
 }
+
+export type JudgementStreamChannel = 'assistant' | 'commentary'
 
 // ---------- 设置/诊断 ----------
 export interface AppHealth {
@@ -342,12 +288,7 @@ export interface AppHealth {
 
 // ---------- 流式事件（主进程 -> 渲染进程） ----------
 export type StreamEvent =
-  | { type: 'chat-delta'; conversationId: string; messageId: string; delta: string }
-  | { type: 'chat-done'; conversationId: string; messageId: string }
-  | { type: 'chat-error'; conversationId: string; messageId: string; error: string }
-  | { type: 'chat-activity'; conversationId: string; messageId: string; item: AgentActivityItem }
-  | { type: 'analysis-update'; analysis: AnalysisRun }
-  | { type: 'analysis-log'; analysisHash: string; line: string }
-  | { type: 'analysis-activity'; analysisHash: string; seatId: string; round: string; item: AgentActivityItem }
+  | { type: 'judgement-update'; judgement: JudgementRun }
+  | { type: 'judgement-activity'; judgementId: string; item: AgentActivityItem }
+  | { type: 'judgement-delta'; judgementId: string; itemId: string; channel: JudgementStreamChannel; delta: string }
   | { type: 'codex-state'; state: CodexState }
-  | { type: 'approval-request'; request: ApprovalRequest }

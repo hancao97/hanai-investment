@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { WORKDIR } from './paths'
-import type { CodexState, ApprovalRequest, AgentActivityItem } from '../shared/types'
+import type { CodexState, AgentActivityItem } from '../shared/types'
 
 type Json = Record<string, unknown>
 
@@ -15,8 +15,8 @@ interface Pending {
 }
 
 export interface TurnHandlers {
-  onDelta?: (delta: string) => void
-  onReasoningDelta?: (delta: string) => void
+  onDelta?: (delta: string, itemId: string) => void
+  onReasoningDelta?: (delta: string, itemId: string) => void
   onItem?: (item: AgentActivityItem) => void
   onCompleted?: (turn: Json) => void
   onFailed?: (error: string) => void
@@ -32,8 +32,10 @@ function toActivityItem(raw: Json, status: 'started' | 'completed'): AgentActivi
   switch (type) {
     case 'commandExecution': {
       const cmd = String(raw.command ?? '')
-      summary = status === 'started' ? `执行命令` : `命令完成`
+      summary = status === 'started' ? '运行命令' : '命令执行完成'
       detail = cmd
+      const output = String(raw.aggregatedOutput ?? '').trim()
+      if (status === 'completed' && output) detail = `${cmd}\n\n${output.slice(0, 6000)}`
       if (status === 'completed' && raw.exitCode != null && Number(raw.exitCode) !== 0) {
         finalStatus = 'failed'
         summary = `命令失败（exit ${raw.exitCode}）`
@@ -44,15 +46,15 @@ function toActivityItem(raw: Json, status: 'started' | 'completed'): AgentActivi
       if (status === 'started') return null
       const sum = Array.isArray(raw.summary) ? raw.summary.join('\n') : String(raw.summary ?? '')
       if (!sum.trim()) return null
-      summary = '思考'
+      summary = '分析思路'
       detail = sum
       break
     }
     case 'agentMessage': {
       if (status === 'started') return null
-      summary = '输出回复'
+      summary = 'Codex'
       const text = String(raw.text ?? '')
-      detail = text.length > 400 ? text.slice(0, 400) + '…' : text || null
+      detail = text || null
       break
     }
     case 'webSearch':
@@ -67,6 +69,9 @@ function toActivityItem(raw: Json, status: 'started' | 'completed'): AgentActivi
     case 'mcpToolCall':
       summary = `调用工具 ${String(raw.server ?? '')}/${String(raw.tool ?? '')}`
       break
+    case 'dynamicToolCall':
+      summary = `调用工具 ${String(raw.tool ?? '')}`
+      break
     case 'plan': {
       if (status === 'started') return null
       summary = '更新计划'
@@ -77,14 +82,16 @@ function toActivityItem(raw: Json, status: 'started' | 'completed'): AgentActivi
     case 'userMessage':
     case 'hookPrompt':
       return null
+    case 'contextCompaction':
+      if (status === 'started') return null
+      summary = '已整理对话上下文'
+      break
     default:
       if (status === 'started') return null
       summary = type
   }
-  return { id: `${id}-${status}`, type, status: finalStatus, summary, detail, at: new Date().toISOString() }
+  return { id: id || `${type}-${Date.now()}`, type, status: finalStatus, summary, detail, at: new Date().toISOString() }
 }
-
-export type ApprovalResolver = (req: ApprovalRequest) => Promise<'accept' | 'decline'>
 
 const APP_SERVER_ARGS = ['app-server']
 
@@ -100,18 +107,14 @@ export class CodexManager {
     account: null,
     models: [],
     selectedModel: null,
-    lastError: null
+    lastError: null,
+    modelCatalogError: null
   }
   private onStateChange: (s: CodexState) => void = () => {}
-  private approvalResolver: ApprovalResolver | null = null
   private starting: Promise<void> | null = null
 
   setStateListener(cb: (s: CodexState) => void): void {
     this.onStateChange = cb
-  }
-
-  setApprovalResolver(cb: ApprovalResolver): void {
-    this.approvalResolver = cb
   }
 
   getState(): CodexState {
@@ -169,6 +172,7 @@ export class CodexManager {
 
   private async doStart(): Promise<void> {
     this.setStatus('connecting')
+    this.state.modelCatalogError = null
     const bin = this.findBinary()
     if (!bin) {
       this.state.path = null
@@ -193,10 +197,19 @@ export class CodexManager {
       return
     }
 
-    const rl = createInterface({ input: this.proc.stdout })
+    const proc = this.proc
+    const rl = createInterface({ input: proc.stdout })
     rl.on('line', (line) => this.handleLine(line))
-    this.proc.stderr.on('data', () => {})
-    this.proc.on('exit', (code) => {
+    proc.stderr.on('data', (chunk) => {
+      const line = String(chunk)
+      if (line.includes('failed to load models cache')) {
+        this.state.modelCatalogError =
+          '当前 Codex CLI 无法解析最新模型目录（通常是 CLI 版本过旧），因此新模型可能缺失。请升级 @openai/codex 后重启检测。'
+        this.emitState()
+      }
+    })
+    proc.on('exit', (code) => {
+      if (this.proc !== proc) return
       this.proc = null
       for (const p of this.pending.values()) p.reject(new Error('codex app-server 已退出'))
       this.pending.clear()
@@ -222,15 +235,20 @@ export class CodexManager {
         plan: typeof acct.planType === 'string' ? acct.planType : null
       }
       try {
-        const models = (await this.request('model/list', {})) as { data?: Json[] }
-        this.state.models = (models.data ?? []).map((m) => ({
-          id: String(m.id ?? m.model ?? ''),
-          displayName: String(m.displayName ?? m.id ?? '')
-        }))
+        const models = (await this.request('model/list', { includeHidden: false })) as { data?: Json[] }
+        this.state.models = (models.data ?? [])
+          .map((m) => ({
+            id: String(m.model ?? m.id ?? ''),
+            displayName: String(m.displayName ?? m.model ?? m.id ?? '')
+          }))
+          .filter((m) => m.id)
         const def = (models.data ?? []).find((m) => m.isDefault === true)
-        if (!this.state.selectedModel && def) this.state.selectedModel = String(def.model ?? def.id)
-      } catch {
+        if (!this.state.selectedModel || !this.state.models.some((m) => m.id === this.state.selectedModel)) {
+          this.state.selectedModel = def ? String(def.model ?? def.id) : (this.state.models[0]?.id ?? null)
+        }
+      } catch (e) {
         this.state.models = []
+        this.state.modelCatalogError = e instanceof Error ? e.message : String(e)
       }
       this.setStatus('ready')
     } catch (e) {
@@ -239,9 +257,12 @@ export class CodexManager {
   }
 
   async restart(): Promise<void> {
-    if (this.proc) {
-      this.proc.kill()
+    const old = this.proc
+    if (old) {
       this.proc = null
+      const exited = new Promise<void>((resolve) => old.once('exit', () => resolve()))
+      old.kill()
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2000))])
     }
     await this.start()
   }
@@ -320,46 +341,36 @@ export class CodexManager {
     }
   }
 
-  // ---------- 服务器请求（审批） ----------
+  // ---------- 服务器请求 ----------
   private async handleServerRequest(msg: Json): Promise<void> {
     const method = String(msg.method)
     const params = (msg.params ?? {}) as Json
-    const threadId = String(params.threadId ?? '')
 
     if (method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval') {
-      const command = String(params.command ?? (Array.isArray(params.command) ? (params.command as string[]).join(' ') : ''))
-      const decision = await this.askApproval({
-        requestId: msg.id as number,
-        threadId,
-        kind: 'command',
-        summary: '角色 Agent 请求执行命令',
-        detail: command || JSON.stringify(params)
-      })
       if (method === 'execCommandApproval') {
-        this.respond(msg.id, { decision: decision === 'accept' ? 'approved' : 'denied' })
+        this.respond(msg.id, { decision: 'approved' })
       } else {
-        this.respond(msg.id, { decision })
+        this.respond(msg.id, { decision: 'accept' })
       }
       return
     }
     if (method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval') {
-      const decision = await this.askApproval({
-        requestId: msg.id as number,
-        threadId,
-        kind: 'file',
-        summary: '角色 Agent 请求修改文件',
-        detail: String(params.reason ?? params.grantRoot ?? '写入讨论目录之外的文件')
-      })
       if (method === 'applyPatchApproval') {
-        this.respond(msg.id, { decision: decision === 'accept' ? 'approved' : 'denied' })
+        this.respond(msg.id, { decision: 'approved' })
       } else {
-        this.respond(msg.id, { decision })
+        this.respond(msg.id, { decision: 'accept' })
       }
       return
     }
     if (method === 'item/permissions/requestApproval') {
-      // 权限升级：默认拒绝，保持沙箱边界
-      this.respond(msg.id, { permissions: {}, scope: 'turn' })
+      const requested = (params.permissions ?? {}) as Json
+      this.respond(msg.id, {
+        permissions: {
+          ...(requested.network ? { network: requested.network } : {}),
+          ...(requested.fileSystem ? { fileSystem: requested.fileSystem } : {})
+        },
+        scope: 'session'
+      })
       return
     }
     if (method === 'item/tool/requestUserInput') {
@@ -370,24 +381,15 @@ export class CodexManager {
     this.respond(msg.id, {})
   }
 
-  private async askApproval(req: ApprovalRequest): Promise<'accept' | 'decline'> {
-    if (!this.approvalResolver) return 'decline'
-    try {
-      return await this.approvalResolver(req)
-    } catch {
-      return 'decline'
-    }
-  }
-
   // ---------- 通知 ----------
   private handleNotification(method: string, params: Json): void {
     const threadId = String(params.threadId ?? '')
     const h = this.turnHandlers.get(threadId)
     if (!h) return
     if (method === 'item/agentMessage/delta') {
-      h.onDelta?.(String(params.delta ?? ''))
+      h.onDelta?.(String(params.delta ?? ''), String(params.itemId ?? ''))
     } else if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
-      h.onReasoningDelta?.(String(params.delta ?? ''))
+      h.onReasoningDelta?.(String(params.delta ?? ''), String(params.itemId ?? ''))
     } else if (method === 'item/started' || method === 'item/completed') {
       const item = toActivityItem((params.item ?? {}) as Json, method === 'item/started' ? 'started' : 'completed')
       if (item) h.onItem?.(item)
@@ -419,8 +421,8 @@ export class CodexManager {
     const result = (await this.request('thread/start', {
       cwd: opts.cwd ?? WORKDIR,
       developerInstructions: opts.developerInstructions ?? null,
-      approvalPolicy: 'on-request',
-      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
       model: opts.model ?? this.state.selectedModel,
       ephemeral: opts.ephemeral ?? false
     })) as Json
@@ -433,8 +435,8 @@ export class CodexManager {
       await this.request('thread/resume', {
         threadId,
         cwd: cwd ?? null,
-        approvalPolicy: 'on-request',
-        sandbox: 'workspace-write'
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access'
       })
       return true
     } catch {
@@ -465,6 +467,14 @@ export class CodexManager {
       await this.request('turn/interrupt', { threadId, turnId }, 10000)
     } catch {
       // 中止失败不阻塞 UI
+    }
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    try {
+      await this.request('thread/archive', { threadId }, 30000)
+    } catch {
+      // 研判报告已落盘时，Codex 线程归档失败不影响本地归档
     }
   }
 

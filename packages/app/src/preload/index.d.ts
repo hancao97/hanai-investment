@@ -12,12 +12,9 @@ import type {
   WatchGroup,
   Persona,
   CodexState,
-  Conversation,
-  ChatMessage,
-  AnalysisRun,
-  AnalysisArtifact,
-  AnalysisActivityEntry,
-  EvidenceSnapshot,
+  JudgementRun,
+  JudgementReport,
+  JudgementActivityEntry,
   AppHealth,
   StreamEvent,
   ProviderMeta
@@ -51,44 +48,27 @@ export interface HanaiApi {
     removeGroup: (id: string) => Promise<void>
     add: (groupId: string, secId: string) => Promise<void>
     remove: (groupId: string, secId: string) => Promise<void>
+    move: (fromGroupId: string, toGroupId: string, secId: string) => Promise<void>
     isWatched: (secId: string) => Promise<boolean>
   }
   persona: {
     list: () => Promise<Persona[]>
-    setEnabled: (id: string, enabled: boolean) => Promise<void>
   }
   codex: {
     state: () => Promise<CodexState>
     restart: () => Promise<void>
     setModel: (model: string | null) => Promise<void>
-    approve: (requestId: number, decision: 'accept' | 'decline') => Promise<void>
   }
-  chat: {
-    list: (personaId?: string) => Promise<Conversation[]>
-    get: (id: string) => Promise<Conversation | null>
-    create: (personaId: string, secId?: string | null) => Promise<Conversation>
-    send: (id: string, text: string) => Promise<ChatMessage>
-    stop: (id: string) => Promise<void>
-    rename: (id: string, title: string) => Promise<void>
-    delete: (id: string) => Promise<void>
-  }
-  committee: {
-    list: () => Promise<AnalysisRun[]>
-    get: (hash: string) => Promise<AnalysisRun | null>
+  judgement: {
+    list: () => Promise<JudgementRun[]>
+    get: (id: string) => Promise<JudgementRun | null>
     create: (params: {
       secId: string
-      moderatorPersonaId: string
-      participantPersonaIds: string[]
-      topic: string | null
-    }) => Promise<AnalysisRun>
-    start: (hash: string) => Promise<void>
-    stop: (hash: string) => Promise<void>
-    artifacts: (hash: string) => Promise<AnalysisArtifact[]>
-    activity: (hash: string) => Promise<AnalysisActivityEntry[]>
-    delete: (hash: string) => Promise<void>
-  }
-  evidence: {
-    create: (secId: string) => Promise<EvidenceSnapshot>
+      personaId: string
+    }) => Promise<JudgementRun>
+    start: (id: string) => Promise<void>
+    activity: (id: string) => Promise<JudgementActivityEntry[]>
+    report: (id: string) => Promise<JudgementReport | null>
   }
   app: {
     health: () => Promise<AppHealth>

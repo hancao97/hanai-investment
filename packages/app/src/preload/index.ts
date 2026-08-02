@@ -29,39 +29,25 @@ const api = {
     removeGroup: (id: string) => invoke('watch:removeGroup', id),
     add: (groupId: string, secId: string) => invoke('watch:add', groupId, secId),
     remove: (groupId: string, secId: string) => invoke('watch:remove', groupId, secId),
+    move: (fromGroupId: string, toGroupId: string, secId: string) =>
+      invoke('watch:move', fromGroupId, toGroupId, secId),
     isWatched: (secId: string) => invoke('watch:isWatched', secId)
   },
   persona: {
-    list: () => invoke('persona:list'),
-    setEnabled: (id: string, enabled: boolean) => invoke('persona:setEnabled', id, enabled)
+    list: () => invoke('persona:list')
   },
   codex: {
     state: () => invoke('codex:state'),
     restart: () => invoke('codex:restart'),
-    setModel: (model: string | null) => invoke('codex:setModel', model),
-    approve: (requestId: number, decision: 'accept' | 'decline') => invoke('codex:approve', requestId, decision)
+    setModel: (model: string | null) => invoke('codex:setModel', model)
   },
-  chat: {
-    list: (personaId?: string) => invoke('chat:list', personaId),
-    get: (id: string) => invoke('chat:get', id),
-    create: (personaId: string, secId?: string | null) => invoke('chat:create', personaId, secId),
-    send: (id: string, text: string) => invoke('chat:send', id, text),
-    stop: (id: string) => invoke('chat:stop', id),
-    rename: (id: string, title: string) => invoke('chat:rename', id, title),
-    delete: (id: string) => invoke('chat:delete', id)
-  },
-  committee: {
-    list: () => invoke('committee:list'),
-    get: (hash: string) => invoke('committee:get', hash),
-    create: (params: unknown) => invoke('committee:create', params),
-    start: (hash: string) => invoke('committee:start', hash),
-    stop: (hash: string) => invoke('committee:stop', hash),
-    artifacts: (hash: string) => invoke('committee:artifacts', hash),
-    activity: (hash: string) => invoke('committee:activity', hash),
-    delete: (hash: string) => invoke('committee:delete', hash)
-  },
-  evidence: {
-    create: (secId: string) => invoke('evidence:create', secId)
+  judgement: {
+    list: () => invoke('judgement:list'),
+    get: (id: string) => invoke('judgement:get', id),
+    create: (params: unknown) => invoke('judgement:create', params),
+    start: (id: string) => invoke('judgement:start', id),
+    activity: (id: string) => invoke('judgement:activity', id),
+    report: (id: string) => invoke('judgement:report', id)
   },
   app: {
     health: () => invoke('app:health'),

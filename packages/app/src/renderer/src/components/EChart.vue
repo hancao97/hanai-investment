@@ -36,8 +36,22 @@ const el = ref<HTMLDivElement | null>(null)
 const chart = shallowRef<ECharts | null>(null)
 let resizeObserver: ResizeObserver | null = null
 
+function onContainerClick(event: MouseEvent): void {
+  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-sector-code]') : null
+  const sectorCode = target?.dataset.sectorCode
+  if (!sectorCode) return
+  event.stopPropagation()
+  emit('chartClick', {
+    data: {
+      sectorCode,
+      name: target.dataset.sectorName ?? ''
+    }
+  })
+}
+
 onMounted(() => {
   if (!el.value) return
+  el.value.addEventListener('click', onContainerClick)
   chart.value = echarts.init(el.value)
   chart.value.on('click', (params) => emit('chartClick', params))
   if (props.option) chart.value.setOption(props.option)
@@ -54,6 +68,7 @@ watch(
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
+  el.value?.removeEventListener('click', onContainerClick)
   chart.value?.dispose()
 })
 </script>

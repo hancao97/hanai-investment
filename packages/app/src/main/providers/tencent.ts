@@ -51,8 +51,8 @@ export async function getKlineTx(
       close: Number(close),
       high: Number(high),
       low: Number(low),
-      volume: Number(volume) * 100, // 手 -> 股
-      amount: 0
+      volume: Number(volume), // 与东方财富统一为“手”
+      amount: null // 腾讯历史 K 线不提供成交额，不用 0 冒充真实值
     })
   }
   if (!bars.length) return null
@@ -98,7 +98,7 @@ export async function getTrendTx(
       time,
       price,
       avgPrice: avgPrice != null && Number.isFinite(avgPrice) ? Number(avgPrice.toFixed(3)) : null,
-      volume: Math.max(0, (cumVol - lastCumVol) * 100)
+      volume: Math.max(0, cumVol - lastCumVol)
     })
     lastCumVol = cumVol
   }

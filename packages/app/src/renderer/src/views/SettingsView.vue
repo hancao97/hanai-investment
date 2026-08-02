@@ -62,6 +62,7 @@ const codexStatusText = computed(() => {
 })
 
 const codexHint = computed(() => {
+  if (app.codexState?.modelCatalogError) return app.codexState.modelCatalogError
   const s = app.codexState?.status
   if (s === 'not-installed')
     return '未找到 codex 可执行文件。请安装 Codex CLI（npm install -g @openai/codex 或 brew install codex），然后点击重新检测。'
@@ -104,13 +105,16 @@ const codexHint = computed(() => {
           <b v-else>—</b>
         </div>
         <div v-if="codexHint" class="hint-box">{{ codexHint }}</div>
+        <div v-if="app.codexState?.modelCatalogError" class="meta-line model-fix">
+          修复命令：<code class="num">npm install -g @openai/codex@latest</code>，完成后点击“重启 / 重新检测”。
+        </div>
         <div class="actions">
           <button class="btn" :disabled="restarting" @click="restartCodex">
             {{ restarting ? '正在重启…' : '重启 / 重新检测' }}
           </button>
         </div>
         <div class="meta-line" style="margin-top: 10px">
-          所有命令与文件修改请求都会弹出审批；本地 Codex 进程的模型推理可能使用你在 Codex 中配置的外部服务。
+          研判任务默认使用完全访问权限自动执行，不弹出命令或文件审批。
         </div>
       </div>
 
@@ -120,14 +124,14 @@ const codexHint = computed(() => {
         <div class="source-row">
           <span class="dot" :class="app.health?.market.ok ? 'ok' : 'error'" />
           <div>
-            <b>行情 · 东方财富（个人研究原型适配）</b>
+            <b>行情 · 东方财富</b>
             <div class="meta-line">近实时快照 · 最近成功 {{ fmtDateTime(app.health?.market.lastSuccess) }}</div>
           </div>
         </div>
         <div class="source-row">
           <span class="dot" :class="app.health?.valuation.ok ? 'ok' : 'error'" />
           <div>
-            <b>估值 · 价值大师网（个人研究原型接口）</b>
+            <b>估值 · 价值大师网</b>
             <div class="meta-line">日级缓存 90 天 · 未获再分发授权，仅限个人研究使用</div>
           </div>
         </div>
@@ -144,19 +148,19 @@ const codexHint = computed(() => {
       <div class="card">
         <div class="card-title">本地存储</div>
         <div class="kv"><span>数据目录</span><b class="num">{{ app.health?.dataDir }}</b></div>
-        <div class="kv"><span>Agent 工作目录</span><b class="num">{{ app.health?.workDir }}</b></div>
+        <div class="kv"><span>Codex 工作目录</span><b class="num">{{ app.health?.workDir }}</b></div>
         <template v-if="stats">
           <div class="kv"><span>总占用</span><b class="num">{{ fmtBytes(stats.total) }}</b></div>
           <div class="kv"><span>行情缓存</span><b class="num">{{ fmtBytes(stats.marketCache) }}</b></div>
           <div class="kv"><span>估值缓存</span><b class="num">{{ fmtBytes(stats.valuationCache) }}</b></div>
-          <div class="kv"><span>讨论归档</span><b class="num">{{ fmtBytes(stats.workdir) }}</b></div>
+          <div class="kv"><span>研判归档</span><b class="num">{{ fmtBytes(stats.workdir) }}</b></div>
         </template>
         <div class="actions">
           <button class="btn" @click="openDataDir">打开数据目录</button>
           <button class="btn" @click="clearCache('market')">清理行情缓存</button>
           <button class="btn" @click="clearCache('valuation')">清理估值缓存</button>
         </div>
-        <div class="meta-line" style="margin-top: 10px">清理缓存不会删除自选、角色、聊天与讨论报告。</div>
+        <div class="meta-line" style="margin-top: 10px">清理缓存不会删除自选、专家与研判报告。</div>
       </div>
 
       <!-- 关于 -->
@@ -165,8 +169,7 @@ const codexHint = computed(() => {
         <div class="about">
           <p><b>Hanai Investment</b> v0.1 · 本地优先 A 股价值研究工作台</p>
           <p>本产品是研究辅助工具，不是券商、投顾或资产管理服务：不执行交易、不承诺收益、不提供确定性买卖建议。</p>
-          <p>所有名人角色（巴菲特、芒格、段永平、混江龙）均为基于公开资料构建的 AI 模拟视角，不代表本人观点，未获本人或其机构背书。</p>
-          <p>行情与估值数据可能延迟、不完整或有误，请以交易所与官方披露为准；数据接口为个人研究原型适配，未获再分发授权，不得用于公开发行。</p>
+          <p>行情与估值数据可能延迟、不完整或有误，请以交易所与官方披露为准；数据接口仅限个人研究，未获再分发授权，不得用于公开发行。</p>
           <p>遥测默认关闭；全部用户数据保存在本机 <code class="num">~/.hanai-investment</code>。</p>
         </div>
       </div>

@@ -1,45 +1,64 @@
 # Hanai Investment
 
-本地优先的 A 股价值研究与多角色投资委员会桌面客户端。
+本地优先的 A 股行情、估值与单专家投资研判桌面工作台。
 
-- 今日市场 Dashboard：核心指数、市场宽度（涨跌/涨停家数）、行业与概念板块热力树图（可下钻成分股）、涨跌幅/成交额/换手率榜单
-- 自选与发现：本地证券主数据毫秒级检索（代码 / 名称 / 拼音全拼 / 首字母，⌘K 全局搜索）、自选分组与近实时行情刷新
-- 股票详情：分时 / 日周月 K 线、实时行情快照、财报期基本面、价值大师估值（大师价值、GF 评分、五维评分雷达、价格 vs 价值线历史曲线），数据来源与时效分层展示
-- 大师单聊：巴菲特、芒格、段永平、混江龙四个 AI 模拟视角常驻侧栏，可绑定股票证据快照对话，流式回复、可中止
-- 投资委员会：选择主持人与 1–4 名参与角色，两轮独立并发书面讨论 + 交叉互评 + 主持终审，全部报告哈希封存在本地归档目录
-- Agent 能力依赖本机 Codex（app-server），不需要额外配置 API Key；所有命令与文件修改请求都会弹出审批
+- 今日市场：核心指数、五档市场宽度、行业/概念热力、榜单与板块下钻
+- 自选与发现：本地证券主数据检索、自选分组和近实时行情
+- 股票详情：分时、日周月 K 线、行情快照、基本面和估值曲线
+- 专家中心：段永平、芒格、巴菲特、混江龙四套独立投资框架
+- 大师研判：一次只选择一位专家；为每项任务创建独立工作区，同步专家 Skill，由 Codex Agent 主动获取公开信息并生成 `REPORT.md`
+- 研判归档：实时展示 Agent 的搜索、命令、推理摘要与文件变更；完成后只读，不支持继续对话，可按股票或分析人筛选
+
+## 研判工作区
+
+每项任务保存在：
+
+```text
+~/.hanai-investment/runtime/workdir/judgements/<task-id>/
+├── AGENTS.md
+├── RUN.json
+├── activity.jsonl
+├── REPORT.md
+└── agents/
+    └── skills/
+        └── <persona-id>/
+            ├── SKILL.md
+            └── references/...
+```
+
+任务只接收股票名、代码和所选专家。Agent 自行检索最新公开资料；不生成冻结证据包，不创建主持人或委员会席位。报告完成后，对应 Codex 线程归档，应用只展示执行轨迹和最终报告。
 
 ## 目录结构
 
-```
+```text
 packages/
 ├── app/     # Electron + Vue 3 桌面客户端
-└── agents/  # Nuwa 风格角色包（SKILL.md + 调研资料）
-    ├── duan-yongping-perspective/
-    ├── hunjianglong-perspective/
-    ├── munger-perspective/
-    └── warren-buffett-perspective/
+└── agents/  # 专家 Skill（SKILL.md + 文本研究资料）
 prd/         # 产品需求文档
 ```
 
 ## 开发
 
-要求：Node ≥ 22、pnpm ≥ 8、本机安装并登录 [Codex CLI](https://developers.openai.com/codex)（Agent 功能可选，缺失时行情/自选/详情仍可用）。
+要求：Node ≥ 22、pnpm ≥ 8、本机安装并登录 [Codex CLI](https://developers.openai.com/codex)。
 
 ```bash
 pnpm install
-pnpm dev        # 启动客户端
-pnpm typecheck  # 类型检查
-pnpm build      # 构建
+pnpm dev
+pnpm typecheck
+pnpm build
 ```
 
-## 数据与隐私
+若设置页缺少新模型，先升级 Codex CLI：
 
-- 全部用户数据保存在 `~/.hanai-investment`（SQLite + 文件归档），Agent 默认工作目录为 `~/.hanai-investment/runtime/workdir`
-- 角色包首次启动时从 `packages/agents` 导入到 `~/.hanai-investment/personas/<id>/v1/`，可手动放入其他 Nuwa 风格角色包
-- 讨论归档按 `runtime/workdir/<analysis-hash>/` 组织：`evidence.json`（不可变证据快照）、各席位 `turn01.md / turn02.md`、主持人 `final.md`、`manifests/`（SHA-256 封存清单）、`events.jsonl`
+```bash
+npm install -g @openai/codex@latest
+```
+
+应用通过 Codex app-server 的 `model/list` 获取当前账号可用模型，不维护硬编码模型清单。
+
+## 数据与边界
+
+- 全部应用数据保存在 `~/.hanai-investment`
 - 遥测默认关闭，无云同步
-
-## 声明
-
-本产品是研究辅助工具，不是券商、投顾或资产管理服务：不执行交易、不承诺收益、不提供确定性买卖建议。所有名人角色均为基于公开资料构建的 AI 模拟视角，不代表本人观点，未获本人或其机构背书。行情（东方财富）与估值（价值大师网）接口为个人研究原型适配，未获再分发授权，不得用于公开发行。
+- 行情与估值接口为个人研究原型适配，可能延迟、不完整或有误
+- 本产品不接券商交易，不承诺收益，不提供确定性买卖指令

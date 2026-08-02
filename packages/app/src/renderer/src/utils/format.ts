@@ -25,6 +25,21 @@ export function fmtAmount(v: number | null | undefined): string {
   return v.toFixed(0)
 }
 
+/** 成交量：数据源统一为手（1 手 = 100 股） */
+export function fmtHands(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const abs = Math.abs(v)
+  if (abs >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`
+  if (abs >= 1e4) return `${(v / 1e4).toFixed(2)}万手`
+  return `${v.toFixed(0)}手`
+}
+
+/** 股本数量 */
+export function fmtShares(v: number | null | undefined): string {
+  const value = fmtAmount(v)
+  return value === '—' ? value : `${value}股`
+}
+
 export function pctClass(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v) || v === 0) return 'flat'
   return v > 0 ? 'up' : 'down'

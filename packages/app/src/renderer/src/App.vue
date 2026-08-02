@@ -3,8 +3,6 @@ import { onMounted, computed, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
 import GlobalSearch from './components/GlobalSearch.vue'
-import PersonaRail from './components/PersonaRail.vue'
-import ApprovalDialog from './components/ApprovalDialog.vue'
 import { fmtTime } from './utils/format'
 
 const app = useAppStore()
@@ -26,9 +24,8 @@ const searchOpen = ref(false)
 const navs = [
   { path: '/dashboard', label: '今日市场', icon: '◈' },
   { path: '/watch', label: '自选与发现', icon: '☆' },
-  { path: '/chat', label: '大师对话', icon: '✉' },
-  { path: '/committee', label: '分析讨论', icon: '⚖' },
-  { path: '/personas', label: '角色中心', icon: '◉' },
+  { path: '/judgements', label: '大师研判', icon: '研' },
+  { path: '/personas', label: '专家中心', icon: '◉' },
   { path: '/settings', label: '设置与诊断', icon: '⚙' }
 ]
 
@@ -97,9 +94,7 @@ const marketDot = computed(() => (app.health?.market.ok ? 'ok' : 'error'))
           <span>搜索股票 · 代码 / 名称 / 拼音</span>
           <span class="kbd">⌘K</span>
         </button>
-        <div class="topbar-right">
-          <span v-if="app.approvals.length" class="tag gold">{{ app.approvals.length }} 个待审批</span>
-        </div>
+        <div class="topbar-right" />
       </header>
       <main class="content">
         <router-view v-slot="{ Component }">
@@ -108,9 +103,7 @@ const marketDot = computed(() => (app.health?.market.ok ? 'ok' : 'error'))
       </main>
     </div>
 
-    <PersonaRail />
     <GlobalSearch v-model:open="searchOpen" />
-    <ApprovalDialog />
   </div>
 </template>
 

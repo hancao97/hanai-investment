@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import type { StockMetrics, ValuationSummary, KLineBar, TrendPoint, WatchGroup } from '@shared/types'
 import type { EChartsCoreOption } from 'echarts/core'
 import EChart from '../components/EChart.vue'
-import PersonaPicker from '../components/PersonaPicker.vue'
-import CommitteeLauncher from '../components/CommitteeLauncher.vue'
-import { fmtNum, fmtPct, fmtSign, fmtAmount, pctClass, fmtTime, fmtDateTime } from '../utils/format'
+import JudgementLauncher from '../components/JudgementLauncher.vue'
+import WatchGroupDialog from '../components/WatchGroupDialog.vue'
+import { fmtNum, fmtPct, fmtSign, fmtAmount, fmtHands, fmtShares, pctClass, fmtTime, fmtDateTime } from '../utils/format'
 
 const route = useRoute()
-const router = useRouter()
 const secId = computed(() => String(route.params.secId ?? ''))
 
 const metrics = ref<StockMetrics | null>(null)
@@ -20,8 +19,8 @@ const trend = ref<{ points: TrendPoint[]; prevClose: number | null } | null>(nul
 const chartMode = ref<'trend' | 'daily' | 'weekly' | 'monthly'>('daily')
 const watched = ref(false)
 const groups = ref<WatchGroup[]>([])
-const pickerOpen = ref(false)
-const committeeOpen = ref(false)
+const watchDialogOpen = ref(false)
+const judgementOpen = ref(false)
 const loading = ref(true)
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -50,8 +49,7 @@ async function loadAll(): Promise<void> {
   metrics.value = await window.hanai.market.metrics(secId.value)
   loading.value = false
   void loadChart()
-  void window.hanai.watch.isWatched(secId.value).then((w) => (watched.value = w))
-  void window.hanai.watch.groups().then((g) => (groups.value = g))
+  void refreshWatchState()
   try {
     valuation.value = await window.hanai.valuation.get(secId.value)
     if (!valuation.value) valuationError.value = '暂无估值数据（供应商无此标的或不可用）'
@@ -88,22 +86,9 @@ onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
 })
 
-async function toggleWatch(): Promise<void> {
-  const g = groups.value[0]
-  if (!g) return
-  if (watched.value) {
-    for (const grp of groups.value) await window.hanai.watch.remove(grp.id, secId.value)
-    watched.value = false
-  } else {
-    await window.hanai.watch.add(g.id, secId.value)
-    watched.value = true
-  }
-}
-
-async function startChat(personaId: string): Promise<void> {
-  pickerOpen.value = false
-  const conv = await window.hanai.chat.create(personaId, secId.value)
-  void router.push(`/chat/${conv.id}`)
+async function refreshWatchState(): Promise<void> {
+  groups.value = await window.hanai.watch.groups()
+  watched.value = groups.value.some((group) => group.secIds.includes(secId.value))
 }
 
 // ---------- 图表 ----------
@@ -113,13 +98,42 @@ const AXIS_STYLE = {
   splitLine: { lineStyle: { color: 'rgba(255,255,255,0.045)' } }
 }
 
+interface AxisTooltipParam {
+  dataIndex?: number
+}
+
+function tooltipDataIndex(rawParams: unknown): number | null {
+  const params = Array.isArray(rawParams) ? (rawParams as AxisTooltipParam[]) : []
+  const index = Number(params[0]?.dataIndex)
+  return Number.isInteger(index) && index >= 0 ? index : null
+}
+
 const priceChartOption = computed<EChartsCoreOption | null>(() => {
   if (chartMode.value === 'trend') {
     if (!trend.value?.points.length) return null
     const pts = trend.value.points
     const base = trend.value.prevClose
     return {
-      tooltip: { trigger: 'axis', backgroundColor: '#161b26', borderColor: 'rgba(255,255,255,0.14)', textStyle: { color: '#e8eaf0', fontSize: 11 } },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: '#161b26',
+        borderColor: 'rgba(255,255,255,0.14)',
+        textStyle: { color: '#e8eaf0', fontSize: 11 },
+        formatter: (rawParams: unknown): string => {
+          const index = tooltipDataIndex(rawParams)
+          const point = index == null ? null : pts[index]
+          if (!point) return ''
+          const lines = [
+            `<b>${point.time}</b>`,
+            `<span style="color:#e0b34c">●</span> 价格 <b>${fmtNum(point.price)} 元</b>`
+          ]
+          if (point.avgPrice != null) {
+            lines.push(`<span style="color:#5b8def">●</span> 均价 <b>${fmtNum(point.avgPrice)} 元</b>`)
+          }
+          lines.push(`<span style="color:#8b93a7">●</span> 成交量 <b>${fmtHands(point.volume)}</b>`)
+          return lines.join('<br/>')
+        }
+      },
       grid: [
         { left: 52, right: 16, top: 12, height: '62%' },
         { left: 52, right: 16, top: '76%', height: '18%' }
@@ -158,10 +172,18 @@ const priceChartOption = computed<EChartsCoreOption | null>(() => {
         },
         {
           type: 'bar',
-          data: pts.map((p) => p.volume),
+          data: pts.map((p, index) => {
+            const previousPrice = index === 0 ? base : pts[index - 1]?.price
+            const color =
+              previousPrice == null || p.price === previousPrice
+                ? 'rgba(139,147,167,0.5)'
+                : p.price > previousPrice
+                  ? 'rgba(240,74,85,0.68)'
+                  : 'rgba(47,172,116,0.68)'
+            return { value: p.volume, itemStyle: { color } }
+          }),
           xAxisIndex: 1,
-          yAxisIndex: 1,
-          itemStyle: { color: 'rgba(139,147,167,0.5)' }
+          yAxisIndex: 1
         }
       ]
     }
@@ -169,7 +191,36 @@ const priceChartOption = computed<EChartsCoreOption | null>(() => {
   if (!bars.value.length) return null
   const b = bars.value
   return {
-    tooltip: { trigger: 'axis', backgroundColor: '#161b26', borderColor: 'rgba(255,255,255,0.14)', textStyle: { color: '#e8eaf0', fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#161b26',
+      borderColor: 'rgba(255,255,255,0.14)',
+      textStyle: { color: '#e8eaf0', fontSize: 11 },
+      formatter: (rawParams: unknown): string => {
+        const index = tooltipDataIndex(rawParams)
+        const bar = index == null ? null : b[index]
+        if (!bar) return ''
+        const previousClose = index != null && index > 0 ? b[index - 1]?.close : null
+        const changePct = previousClose != null && previousClose !== 0 ? ((bar.close - previousClose) / previousClose) * 100 : null
+        const lines = [
+          `<b>${bar.date}</b>`,
+          `开盘 <b>${fmtNum(bar.open)} 元</b>`,
+          `收盘 <b>${fmtNum(bar.close)} 元</b>`,
+          `最高 <b>${fmtNum(bar.high)} 元</b>`,
+          `最低 <b>${fmtNum(bar.low)} 元</b>`,
+          `成交量 <b>${fmtHands(bar.volume)}</b>`
+        ]
+        if (changePct != null) {
+          lines.splice(
+            2,
+            0,
+            `涨跌幅 <b style="color:${changePct > 0 ? '#f04a55' : changePct < 0 ? '#2fac74' : '#9aa3b5'}">${fmtPct(changePct)}</b>`
+          )
+        }
+        if (bar.amount != null) lines.push(`成交额 <b>${fmtAmount(bar.amount)}</b>`)
+        return lines.join('<br/>')
+      }
+    },
     grid: [
       { left: 52, right: 16, top: 12, height: '62%' },
       { left: 52, right: 16, top: '76%', height: '18%' }
@@ -201,7 +252,7 @@ const priceChartOption = computed<EChartsCoreOption | null>(() => {
         type: 'bar',
         data: b.map((x) => ({
           value: x.volume,
-          itemStyle: { color: x.close >= x.open ? 'rgba(240,74,85,0.5)' : 'rgba(47,172,116,0.5)' }
+          itemStyle: { color: x.close >= x.open ? 'rgba(240,74,85,0.68)' : 'rgba(47,172,116,0.68)' }
         })),
         xAxisIndex: 1,
         yAxisIndex: 1
@@ -379,11 +430,10 @@ const chartTabs = [
           <span class="sh-chg num">{{ fmtSign(metrics.change) }} / {{ fmtPct(metrics.changePct) }}</span>
         </div>
         <div class="sh-actions">
-          <button class="btn" :class="{ primary: !watched }" @click="toggleWatch">
-            {{ watched ? '✓ 已自选' : '☆ 加自选' }}
+          <button class="btn" :class="{ primary: !watched }" @click="watchDialogOpen = true">
+            {{ watched ? '✓ 管理自选' : '☆ 加入自选' }}
           </button>
-          <button class="btn" @click="pickerOpen = true">问一位大师</button>
-          <button class="btn primary" @click="committeeOpen = true">发起大师分析</button>
+          <button class="btn primary" @click="judgementOpen = true">发起大师研判</button>
         </div>
       </div>
 
@@ -418,9 +468,13 @@ const chartTabs = [
               <div class="metric"><span>最高</span><b class="num up">{{ fmtNum(metrics.high) }}</b></div>
               <div class="metric"><span>最低</span><b class="num down">{{ fmtNum(metrics.low) }}</b></div>
               <div class="metric"><span>昨收</span><b class="num">{{ fmtNum(metrics.prevClose) }}</b></div>
+              <div class="metric"><span>均价</span><b class="num">{{ fmtNum(metrics.averagePrice) }}</b></div>
+              <div class="metric"><span>振幅</span><b class="num">{{ metrics.amplitude == null ? '—' : metrics.amplitude.toFixed(2) + '%' }}</b></div>
+              <div class="metric"><span>总手</span><b class="num">{{ fmtHands(metrics.volume) }}</b></div>
               <div class="metric"><span>成交额</span><b class="num">{{ fmtAmount(metrics.amount) }}</b></div>
               <div class="metric"><span>换手率</span><b class="num">{{ metrics.turnoverRate == null ? '—' : metrics.turnoverRate.toFixed(2) + '%' }}</b></div>
               <div class="metric"><span>量比</span><b class="num">{{ fmtNum(metrics.volumeRatio) }}</b></div>
+              <div class="metric"><span>主力净流入</span><b class="num" :class="pctClass(metrics.mainNetInflow)">{{ fmtAmount(metrics.mainNetInflow) }}</b></div>
               <div class="metric"><span>总市值</span><b class="num">{{ fmtAmount(metrics.marketCap) }}</b></div>
               <div class="metric"><span>流通市值</span><b class="num">{{ fmtAmount(metrics.floatCap) }}</b></div>
             </div>
@@ -432,17 +486,23 @@ const chartTabs = [
               <span class="meta-line">低频数据 · 与盘中价格时效不同</span>
             </div>
             <div class="metric-grid">
-              <div class="metric"><span>PE(TTM)</span><b class="num">{{ metrics.peTtm == null || metrics.peTtm <= 0 ? '—' : metrics.peTtm.toFixed(2) }}</b></div>
+              <div class="metric"><span>PE(动)</span><b class="num">{{ metrics.peDynamic == null || metrics.peDynamic <= 0 ? '—' : metrics.peDynamic.toFixed(2) }}</b></div>
               <div class="metric"><span>PE(静)</span><b class="num">{{ metrics.peStatic == null || metrics.peStatic <= 0 ? '—' : metrics.peStatic.toFixed(2) }}</b></div>
+              <div class="metric"><span>PE(TTM)</span><b class="num">{{ metrics.peTtm == null || metrics.peTtm <= 0 ? '—' : metrics.peTtm.toFixed(2) }}</b></div>
               <div class="metric"><span>PB</span><b class="num">{{ fmtNum(metrics.pb) }}</b></div>
+              <div class="metric"><span>PS(TTM)</span><b class="num">{{ metrics.psTtm == null || metrics.psTtm <= 0 ? '—' : metrics.psTtm.toFixed(2) }}</b></div>
               <div class="metric"><span>ROE</span><b class="num">{{ metrics.roe == null ? '—' : metrics.roe.toFixed(2) + '%' }}</b></div>
               <div class="metric"><span>每股收益</span><b class="num">{{ fmtNum(metrics.eps) }}</b></div>
               <div class="metric"><span>每股净资产</span><b class="num">{{ fmtNum(metrics.bvps) }}</b></div>
+              <div class="metric"><span>股息率(TTM)</span><b class="num">{{ metrics.dividendYield == null ? '—' : metrics.dividendYield.toFixed(2) + '%' }}</b></div>
+              <div class="metric"><span>总股本</span><b class="num">{{ fmtShares(metrics.totalShares) }}</b></div>
+              <div class="metric"><span>流通股</span><b class="num">{{ fmtShares(metrics.floatShares) }}</b></div>
               <div class="metric"><span>营收</span><b class="num">{{ fmtAmount(metrics.totalRevenue) }}</b></div>
               <div class="metric"><span>营收同比</span><b class="num" :class="pctClass(metrics.revenueYoy)">{{ fmtPct(metrics.revenueYoy) }}</b></div>
               <div class="metric"><span>净利润</span><b class="num">{{ fmtAmount(metrics.netProfit) }}</b></div>
               <div class="metric"><span>净利同比</span><b class="num" :class="pctClass(metrics.netProfitYoy)">{{ fmtPct(metrics.netProfitYoy) }}</b></div>
               <div class="metric"><span>毛利率</span><b class="num">{{ metrics.grossMargin == null ? '—' : metrics.grossMargin.toFixed(2) + '%' }}</b></div>
+              <div class="metric"><span>净利率</span><b class="num">{{ metrics.netMargin == null ? '—' : metrics.netMargin.toFixed(2) + '%' }}</b></div>
               <div class="metric"><span>负债率</span><b class="num">{{ metrics.debtRatio == null ? '—' : metrics.debtRatio.toFixed(2) + '%' }}</b></div>
             </div>
           </div>
@@ -520,11 +580,17 @@ const chartTabs = [
       <button class="btn" @click="loadAll">重试</button>
     </div>
 
-    <PersonaPicker v-model:open="pickerOpen" @pick="startChat" />
-    <CommitteeLauncher
-      v-model:open="committeeOpen"
+    <JudgementLauncher
+      v-model:open="judgementOpen"
       :sec-id="secId"
       :stock-name="metrics?.name ?? ''"
+    />
+    <WatchGroupDialog
+      v-model:open="watchDialogOpen"
+      :sec-id="secId"
+      :stock-name="metrics?.name ?? ''"
+      mode="manage"
+      @changed="refreshWatchState"
     />
   </div>
 </template>
